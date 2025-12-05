@@ -1,2477 +1,1505 @@
-<!DOCTYPE html>
-<html lang="en-us">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="content-type" content="text/html; charset=UTF-8">
-<title>Data Commons - Timelines</title>
-<link rel="shortcut icon" href="data:image/x-icon;," type="image/x-icon">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-
-<link type="text/css" href="../css/base.css" rel="stylesheet" id="/localsite/css/base.css" />
-<script type="text/javascript" src="../js/localsite.js?showheader=true&showsearch=true&scope=country"></script>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="../js/earthscape.js" id="/localsite/js/earthscape.js" type="text/javascript"></script>
-
 <script>
-loadMarkdown("README.md", "readmeDiv", "_parent");
+// --- README + hash scope handling ------------------------------------------
+if (typeof loadMarkdown === 'function') {
+  loadMarkdown("README.md", "readmeDiv", "_parent");
+}
 
-/* Also update home/index.html */
-document.addEventListener('hashChangeEvent', function (elem) {
-    console.log("Timeline page detects URL hashChangeEvent");
-    let hash = getHash();
-    if (!hash.scope) {
-        hash.scope = "country"; // CUSTOM - also set in call to localsite.js above.
+// Respond to custom hashChangeEvent raised from localsite.js
+document.addEventListener('hashChangeEvent', function () {
+  console.log("Timeline page detects URL hashChangeEvent");
+  let hash = (typeof getHash === 'function') ? getHash() : {};
+  if (!hash.scope) {
+    hash.scope = "country"; // default scope
+  }
+  try {
+    if (typeof priorHash === 'object' && priorHash &&
+        (hash.scope !== priorHash.scope || hash.goal !== priorHash.goal)) {
+
+      const selectScope = document.getElementById("selectScope");
+      if (selectScope) {
+        selectScope.value = hash.scope;
+      }
+      if (typeof updateDcidSelectFromSheet === 'function') {
+        updateDcidSelectFromSheet(hash.scope);
+      }
     }
-    if (hash.scope != priorHash.scope || hash.goal != priorHash.goal) {
-        const selectScope = document.getElementById("selectScope");
-        if (selectScope) {
-          selectScope.value = hash.scope;
-        }
-        updateDcidSelectFromSheet(hash.scope); // In localsite/js/earthscape.js
-    }
+  } catch (e) {
+    console.warn('hashChangeEvent handler error:', e);
+  }
 }, false);
+
+// --- Chart size controls (for Width/Height sliders) ------------------------
+function updateChartSize() {
+  const widthSlider  = document.getElementById('widthSlider');
+  const heightSlider = document.getElementById('heightSlider');
+  const widthValue   = document.getElementById('widthValue');
+  const heightValue  = document.getElementById('heightValue');
+
+  if (!widthSlider || !heightSlider) return;
+
+  const width  = parseInt(widthSlider.value, 10)  || 0;
+  const height = parseInt(heightSlider.value, 10) || 0;
+
+  if (widthValue)  widthValue.textContent  = width  + 'px';
+  if (heightValue) heightValue.textContent = height + 'px';
+
+  ['timelineChart', 'lineAreaChart'].forEach((id) => {
+    const canvas = document.getElementById(id);
+    if (!canvas) return;
+
+    canvas.style.width  = width  + 'px';
+    canvas.style.height = height + 'px';
+
+    if (typeof Chart !== 'undefined') {
+      const chart = Chart.getChart(canvas) || canvas.__chart__;
+      if (chart && typeof chart.resize === 'function') {
+        try { chart.resize(); } catch (e) { console.warn('chart resize error', e); }
+      }
+    }
+  });
+}
+
+function resetChartSize() {
+  const widthSlider  = document.getElementById('widthSlider');
+  const heightSlider = document.getElementById('heightSlider');
+  const widthValue   = document.getElementById('widthValue');
+  const heightValue  = document.getElementById('heightValue');
+
+  if (widthSlider)  widthSlider.value  = '800';
+  if (heightSlider) heightSlider.value = '400';
+  if (widthValue)   widthValue.textContent  = '800px';
+  if (heightValue)  heightValue.textContent = '400px';
+
+  ['timelineChart', 'lineAreaChart'].forEach((id) => {
+    const canvas = document.getElementById(id);
+    if (!canvas) return;
+
+    canvas.style.width  = '';
+    canvas.style.height = '';
+
+    if (typeof Chart !== 'undefined') {
+      const chart = Chart.getChart(canvas) || canvas.__chart__;
+      if (chart && typeof chart.resize === 'function') {
+        try { chart.resize(); } catch (e) { console.warn('chart resize error', e); }
+      }
+    }
+  });
+}
+
+// --- Initial DOM wiring: scope, filters, per-capita ------------------------
 document.addEventListener('DOMContentLoaded', () => {
-    let hash = getHash();
+  try {
+    // Ensure scope in hash, fall back to #selectScope, then update sheet
+    let hash = (typeof getHash === 'function') ? getHash() : {};
     if (!hash.scope) {
-        hash.scope = document.getElementById('selectScope').options[document.getElementById('selectScope').selectedIndex].text;
+      const selectScope = document.getElementById('selectScope');
+      if (selectScope && selectScope.selectedIndex >= 0) {
+        hash.scope = selectScope.options[selectScope.selectedIndex].text;
+      } else {
+        hash.scope = 'country';
+      }
     }
-    //alert(hash.scope)
-    updateDcidSelectFromSheet(hash.scope);
-    
-    document.addEventListener('change', function(event) {
-        if (event.target.name === 'whichLines') {
-          console.log('whichLines changed to ' + event.target.value);
-          refreshTimeline();
-        }
-    });
+    if (typeof updateDcidSelectFromSheet === 'function') {
+      updateDcidSelectFromSheet(hash.scope);
+    }
+  } catch (e) {
+    console.warn('Error initializing scope from hash/selectScope:', e);
+  }
 
-    document.getElementById('chartVariable').addEventListener('change', (event) => {
-        refreshTimeline();
-    });
+  // whichLines radios -> refreshTimeline()
+  document.addEventListener('change', (event) => {
+    const target = event.target;
+    if (!target) return;
+    if (target.name === 'whichLines') {
+      console.log('whichLines changed to ' + target.value);
+      if (typeof refreshTimeline === 'function') refreshTimeline();
+    }
+  });
 
-    // State menu change
-    document.getElementById('entityId').addEventListener('change', (event) => {
-        //entityId = event.target.value;
-        refreshTimeline();
-     });
-    document.querySelectorAll('input[name="whichPer"]').forEach((radio) => {
-        radio.addEventListener('change', () => {
-            refreshTimeline(); // This will re-fetch emissions and population and update the chart
-        });
+  const chartVariable = document.getElementById('chartVariable');
+  if (chartVariable) {
+    chartVariable.addEventListener('change', () => {
+      if (typeof refreshTimeline === 'function') refreshTimeline();
     });
+  }
+
+  const entityIdSelect = document.getElementById('entityId');
+  if (entityIdSelect) {
+    entityIdSelect.addEventListener('change', () => {
+      if (typeof refreshTimeline === 'function') refreshTimeline();
+    });
+  }
+
+  document.querySelectorAll('input[name="whichPer"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      if (typeof refreshTimeline === 'function') refreshTimeline();
+    });
+  });
 });
-</script>
 
-<style>
-#selectScope {
-    display: block !important;
-}
-.heroTransparent {
-  position: relative;
-  background: linear-gradient(rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.95)), 
-              url(https://model.earth/apps/img/hero/state/GA/GA-hero.jpg);
-  background-size: cover; /* Scales the image to cover the div */
-  background-position: center; /* Centers the image in the div */
-  background-repeat: no-repeat; /* Prevents the image from repeating */
-  height: auto; /* Allow height to be determined by content */
-  min-height: 120px; /* Minimum height to show the background image */
-}
-.contenttoogleChartType {
-    display: none;
-}
-.active {
-    display: block;
-}
-/* Floating legend for timeline chart (fixed viewport position so it doesn't jump around)
-    The legend will be fixed in the viewport (top-right by default) regardless of canvas updates.
-    Individual legend items remain interactive while the container lets other clicks pass through. */
-#div1 { position: relative; }
-#div2 { position: relative; }
-
-/* Ensure chart containers don't take up space when hidden */
-.toogleDiv {
-    margin: 0;
-    padding: 0;
-}
-
-.toogleDiv[style*="display: none"] {
-    display: none !important;
-    height: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    overflow: hidden !important;
-}
-
-.toogleDiv[style*="display: block"] {
-    display: block !important;
-    margin-bottom: 20px;
-}
-#floating-legend {
-     position: fixed;
-     top: 120px;
-     right: 20px;
-     left: auto;
-     background: rgba(255,255,255,0.95);
-     border-radius: 8px;
-     padding: 8px;
-     box-shadow: 0 6px 18px rgba(0,0,0,0.12);
-     backdrop-filter: blur(6px);
-     border: 1px solid rgba(0,0,0,0.04);
-     z-index: 9999;
-     min-width: 160px;
-     max-height: 320px;
-     overflow-y: auto;
-     font-size: 13px;
-     /* Allow clicks to pass through the legend container so underlying controls (radios, etc.) remain clickable.
-         Individual legend items are interactive (see .legend-item pointer-events:auto). */
-     pointer-events: none;
-}
-
-/* Overlay legend placed inside each chart wrapper (absolute within chart area) */
-.overlay-legend {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    background: rgba(255,255,255,0.9);
-    border-radius: 6px;
-    padding: 6px;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
-    border: 1px solid rgba(0,0,0,0.04);
-    z-index: 10010;
-    min-width: 200px;
-    max-height: 220px;
-    overflow-y: auto;
-    font-size: 12px;
-    pointer-events: none; /* allow underlying chart interactions except for items */
-    display: none; /* hidden by default; shown only via updateOverlayLegendVisibility() */
-}
-.overlay-legend .overlay-legend-content { pointer-events: auto; }
-.overlay-legend .overlay-legend-title { pointer-events: auto; user-select: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-
-/* Overlay title (bold) */
-.overlay-legend .overlay-legend-title {
-    font-weight: 700;
-    padding: 6px 8px;
-    border-bottom: 1px solid rgba(0,0,0,0.05);
-    margin-bottom: 6px;
-    font-size: 13px;
-}
-
-/* Close button in overlay titles */
-.overlay-legend .overlay-legend-close {
-    display: inline-block;
-    cursor: pointer;
-    font-size: 14px;
-    line-height: 1;
-    padding: 2px 6px;
-    border-radius: 4px;
-    border: none;
-    background: transparent;
-    color: rgba(0,0,0,0.8);
-    pointer-events: auto; /* ensure clickable */
-    margin-left: 8px;
-    vertical-align: middle;
-}
-.overlay-legend .overlay-legend-close:hover { background: rgba(0,0,0,0.04); color: rgba(0,0,0,0.95); }
-/* Make title text take the remaining horizontal space so the close sits at the far right */
-.overlay-legend .overlay-legend-title-text { flex: 1 1 auto; display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* On small screens place legend inside the chart area to avoid overflow */
-@media (max-width: 700px) {
-    #floating-legend {
-        right: auto;
-        left: 12px;
-        top: 12px;
+// Per-capita controls hidden for health goal
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    const perCapitaOptions = document.getElementById('perCapitaOptions');
+    if (!perCapitaOptions || typeof getHash !== 'function') return;
+    const hash = getHash();
+    if (hash.goal === 'health') {
+      perCapitaOptions.style.display = 'none';
+    } else {
+      perCapitaOptions.style.display = 'block';
     }
-}
-/* Bottom horizontal key legend under charts */
-.bottom-legend {
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 8px;
-    align-items: center;
-    justify-content: center;
-    padding: 6px 6px;
-    margin-top: 8px;
-    background: transparent;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    font-size: 13px;
-    border-radius: 0;
-    pointer-events: auto;
-}
-.bottom-legend-item { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:6px; cursor:pointer; white-space:nowrap; transition:all 0.14s ease; text-align:center; justify-content:center; background: transparent; }
-.bottom-legend-item .legend-swatch { width:12px; height:12px; border-radius:3px; box-shadow:0 0 0 1px rgba(0,0,0,0.06) inset; flex:0 0 auto; }
-.bottom-legend-item.hidden { opacity:0.45; }
-.bottom-legend-more { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:6px; cursor:pointer; white-space:nowrap; color:rgba(0,0,0,0.65); background: transparent; border: 1px dashed rgba(0,0,0,0.06); }
-.bottom-legend-more:hover { background: rgba(0,0,0,0.02); }
-.bottom-legend-collapsed .bottom-legend-item.extra { display: none; }
-.bottom-legend-item .legend-label { max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display:inline-block; }
-.bottom-legend-item .legend-value { margin-left: 6px; font-weight:600; color: rgba(0,0,0,0.65); }
-.legend-item { display:flex; align-items:center; gap:8px; padding:6px 8px; margin:4px 0; border-radius:6px; cursor:pointer; transition:all 0.18s ease; min-width:0; width:100%; box-sizing:border-box;
-    /* Make individual items accept pointer events while the container lets other clicks through */
-    pointer-events: auto;
-}
-.legend-item .item-actions { display: none; }
-.legend-item.hidden { opacity:0.45; }
+  } catch (e) {
+    console.warn('Error toggling perCapitaOptions:', e);
+  }
+});
 
-/* Label part of legend item — truncate if too long */
-.legend-label { display:inline-block; flex: 1 1 auto; min-width:0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* More Locations button in floating/overlay legends */
-.legend-more-btn {
-    margin-top: 8px;
-    padding: 8px 12px;
-    background: #0066ff;
-    color: white;
-    border-radius: 6px;
-    text-align: center;
-    cursor: pointer;
-    font-weight: bold;
-    font-size: 12px;
-    transition: all 0.2s ease;
-    pointer-events: auto !important;
-    user-select: none;
-}
+// --- Chart type toggles (line / area / both) -------------------------------
+(function initChartTypeToggles() {
+  // Uses global toggleDivs(), defined elsewhere (localsite/earthscape)
+  const radios = document.querySelectorAll('input[name="toogleChartType"]');
+  const handler = () => {
+    if (typeof toggleDivs === 'function') {
+      toggleDivs();
+    }
+    try {
+      if (typeof buildFloatingLegendFromChart === 'function') {
+        buildFloatingLegendFromChart();
+      }
+    } catch (e) {
+      console.warn('legend rebuild failed on toggle:', e);
+    }
+  };
 
-.legend-more-btn:hover {
-    background: #0052cc;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0,102,255,0.3);
-}
+  if (radios && radios.length) {
+    radios.forEach((radio) => {
+      radio.addEventListener('change', handler);
+    });
+  }
 
-.legend-more-btn:active {
-    transform: translateY(0);
-}
+  // Initial state
+  if (typeof toggleDivs === 'function') {
+    try { toggleDivs(); } catch (e) {}
+  }
+})();
 
-/* Menu styling */
-.floating-legend-menu-list {
-    max-height: 300px;
-    overflow-y: auto;
-}
-/* Value small text shown aligned to the right edge of the legend item */
-.legend-value { margin-left: auto; flex: 0 0 auto; color: rgba(0,0,0,0.7); font-weight: 600; padding-left: 8px; }
-</style>
+// ==========================================================================
+// Floating / overlay / bottom legends for timelineChart + lineAreaChart
+// ==========================================================================
 
-<style>
-/* Keep the whichLinesHolder controls above the floating legend so radios remain clickable */
-/* Ensure per-capita option radios are above the legend (prevents legend items from intercepting clicks) */
-#perCapitaOptions { position: relative; z-index: 10002; }
-.whichLinesHolder { position: relative; z-index: 10001; }
-</style>
+function buildFloatingLegendFromChart() {
+  const canvas = document.getElementById('timelineChart');
 
-<style>
-.legend-item:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(0,0,0,0.06); }
+  // Tidy up any duplicate overlays before building
+  try { tidyOverlayLegends(); } catch (e) { /* ignore */ }
 
-</style>
+  if (!canvas || typeof Chart === 'undefined') return false;
 
+  // Decide which chart(s) to build the legend for based on the chart-type toggle
+  const selectedToggle = document.querySelector('input[name="toogleChartType"]:checked')?.value || 'div1';
+  const timelineCanvas = document.getElementById('timelineChart');
+  const lineAreaCanvas = document.getElementById('lineAreaChart');
+  const timelineChartObj = (timelineCanvas && (Chart.getChart(timelineCanvas) || timelineCanvas.__chart__));
+  const lineAreaChartObj = (lineAreaCanvas && (Chart.getChart(lineAreaCanvas) || lineAreaCanvas.__chart__));
 
-<!-- To remove -->
-<style>
-/*Table css start */
-#table-container {
-    padding: 24px 0;
-}
-#table-container table {
-    width: 100%;
-    height: auto;
-    background-color: transparent;
-    border: none;
-    font-size: 14px;
-    overflow: hidden;
-    position: relative;
-    text-align: left;
-    line-height: 1.55em;
-}
-#table-container table tr:first-child {
-    background-color: #e6e6e6;
-    border-bottom: 1px solid #999;
-    box-sizing: border-box;
-    color: #555;
-    font-weight: 700;
-    outline: none;
-    overflow: hidden;
-    position: relative;
-    white-space: nowrap;
-    width: 100%;
-    max-height: 32px;
-} 
-#table-container table tr:first-child th {
-    min-width: 40px;
-    width: auto;
-    height: 32px;
-    background-color: #eee;
-    border-right: 1px solid #fff;
-    background: #e6e6e6;
-    box-sizing: border-box;
-    display: inline-flex;
-    flex-direction: column;
-    justify-content: flex-start;
-    overflow: hidden;
-    position: relative;
-    text-align: left;
-    vertical-align: bottom;
-}
-#table-container table tr:not(:first-child) {
-    background-color: #fff;
-    color: #333;
-    display: inline-block;
-    overflow: visible;
-    position: relative;
-    white-space: nowrap;
-}
-#table-container table tr:not(:first-child) td {
-    border-right: 1px solid #fff;
-    border-bottom: 1px solid #ccc;
-    box-sizing: border-box;
-    display: inline-block;
-    outline: none;
-    overflow: hidden;
-    padding: 4px;
-    position: relative;
-    text-overflow: ellipsis;
-    vertical-align: middle;
-    white-space: nowrap;
-    font-size: 13px;
-    height: 30px;  /*!important;*/
-    padding-top: 6px; /*!important;*/
-}
-#table-container table tr:first-child th.Topic,
-#table-container table tr:not(:first-child) td.num0 {
-    width: 80px;
-}
-#table-container table tr:first-child th.Subtopic,
-#table-container table tr:not(:first-child) td.num1 {
-    width: 80px;
-}
-#table-container table tr:first-child th.DCID,
-#table-container table tr:not(:first-child) td.num2 {
-    width: 232px;
-}    
-#table-container table tr:first-child th.Title,
-#table-container table tr:not(:first-child) td.num3 {
-    width: 168px;
-}
-#table-container table tr:first-child th.IsUsable,
-#table-container table tr:not(:first-child) td.num4 {
-    width: 80px;
-}
-#table-container table tr:first-child th.Scope,
-#table-container table tr:not(:first-child) td.num5 {
-    width: 128px;
-}
-#table-container table tr:first-child th.StartYear,
-#table-container table tr:not(:first-child) td.num6 {
-    width: 96px;
-}
-#table-container table tr:first-child th.EndYear,
-#table-container table tr:not(:first-child) td.num7 {
-    width: 96px;
-}
-#table-container table tr:first-child th.Source,
-#table-container table tr:not(:first-child) td.num8 {
-    width: 232px;
-}
-#table-container table tr:first-child th.Notes,
-#table-container table tr:not(:first-child) td.num9 {
-    width: 64px;
-}
-/* Table css end */ 
-</style>
+  if (!timelineChartObj && !lineAreaChartObj) return false;
 
-</head>
+  // Disable built-in legends
+  [timelineChartObj, lineAreaChartObj].forEach((c) => {
+    if (!c) return;
+    try {
+      if (!c.options) c.options = {};
+      if (!c.options.plugins) c.options.plugins = {};
+      c.options.plugins.legend = { display: false };
+      try { c.update(); } catch (e) { /* ignore */ }
+    } catch (e) { console.warn('Could not set built-in legend display:', e); }
+  });
 
-<body>
+  const legend = document.getElementById('floating-legend');
+  if (!legend) return true;
+  const legendContent = document.getElementById('legend-content');
+  if (!legendContent) return true;
+  legendContent.innerHTML = '';
 
+  const timelineCount = (timelineChartObj && timelineChartObj.data && timelineChartObj.data.datasets)
+    ? timelineChartObj.data.datasets.length
+    : 0;
+  const areaCount = (lineAreaChartObj && lineAreaChartObj.data && lineAreaChartObj.data.datasets)
+    ? lineAreaChartObj.data.datasets.length
+    : 0;
+  const datasetCount = timelineCount + areaCount;
 
-<div class="heroTransparent notdark">
+  const selectedCount = (selectedToggle === 'div2')
+    ? areaCount
+    : (selectedToggle === 'both' ? datasetCount : timelineCount);
 
-<div class="content contentpadding large-list">
-  <!-- Also update in home repo -->
-  <div id="timeline-nav" style="margin-bottom: 8px; font-family: Arial, sans-serif;"><!-- Links are populated here --></div>
-  
-  <script>
-    function updateTimelineNav() {
-      // Define all goals with their display names
-      const goals = [
-        { goal: "air", name: "Emissions" },
-        { goal: "health", name: "Health" },
-        { goal: "jobs", name: "Jobs", extra: "&scope=state" },
-        { goal: "economy", name: "Economy" },
-        { goal: "biodiverse", name: "Biodiversity" },
-        { goal: "water", name: "Water" },
-        { goal: "population", name: "Population" }
-      ];
-  
-      // Get the current goal from the hash
-      const hash = window.location.hash;
-      const goalMatch = hash.match(/goal=([^&]+)/);
-      const currentGoal = goalMatch ? goalMatch[1] : "air"; // Default to "air"
-  
-      // Find the active goal object
-      const activeGoal = goals.find(g => g.goal === currentGoal) || goals[0];
-      //const inactiveGoals = goals.filter(g => g.goal !== currentGoal);
-  
-      const allGoals = goals;
+  const whichLinesMode = document.querySelector('input[name="whichLines"]:checked')?.value || 'showTop5';
 
-      // Clear the container
-      const container = document.getElementById('timeline-nav');
-      container.innerHTML = '';
-  
-      // Add the active goal first as "Timeline"
-      const activeElement = document.createElement('span');
-      activeElement.innerHTML = `<b>${activeGoal.name} Timeline</b>`;
-      //container.appendChild(activeElement);
-  
-      // Add the goals as links
-      allGoals.forEach((goal, index) => {
-        // Only add separator if not the first item
-        if (index > 0) {
-            const separator = document.createTextNode(' | ');
-            container.appendChild(separator);
+  // --- color helper --------------------------------------------------------
+  function colorToRgba(color, alpha) {
+    alpha = (typeof alpha === 'number') ? alpha : 0.12;
+    if (!color) return `rgba(0,0,0,${alpha})`;
+    color = String(color).trim();
+
+    if (color.indexOf('rgb(') === 0) {
+      return color.replace('rgb(', 'rgba(').replace(')', `,${alpha})`);
+    }
+    if (color.indexOf('rgba(') === 0) {
+      const parts = color.match(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)/);
+      if (parts) return `rgba(${parts[1]}, ${parts[2]}, ${parts[3]}, ${alpha})`;
+    }
+    if (color.toLowerCase().indexOf('hsl(') === 0 || color.toLowerCase().indexOf('hsla(') === 0) {
+      const parts = color.match(/hsla?\(\s*([0-9.+-]+)\s*,\s*([0-9.+-]+)%\s*,\s*([0-9.+-]+)%\s*(?:,\s*([0-9.+-]+)\s*)?\)/i);
+      if (parts) {
+        let h = parseFloat(parts[1]);
+        let s = parseFloat(parts[2]) / 100;
+        let l = parseFloat(parts[3]) / 100;
+        let originalA = (typeof parts[4] !== 'undefined') ? parseFloat(parts[4]) : null;
+
+        function hslToRgb(hv, sv, lv) {
+          hv = ((hv % 360) + 360) % 360 / 360;
+          let r, g, b;
+          if (sv === 0) {
+            r = g = b = lv;
+          } else {
+            const hue2rgb = (p, q, t) => {
+              if (t < 0) t += 1;
+              if (t > 1) t -= 1;
+              if (t < 1/6) return p + (q - p) * 6 * t;
+              if (t < 1/2) return q;
+              if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+              return p;
+            };
+            const q = lv < 0.5 ? lv * (1 + sv) : lv + sv - lv * sv;
+            const p = 2 * lv - q;
+            r = hue2rgb(p, q, hv + 1/3);
+            g = hue2rgb(p, q, hv);
+            b = hue2rgb(p, q, hv - 1/3);
+          }
+          return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
         }
-        
-        if (goal.goal === currentGoal) {
-            // Make current goal bold instead of linking it
-            const boldText = document.createElement('b');
-            boldText.textContent = goal.name;
-            boldText.style.marginLeft = '2px';
-            boldText.style.marginRight = '2px';
-            container.appendChild(boldText);
+        const [r, g, b] = hslToRgb(h, s, l);
+        const outA = (originalA !== null && typeof alpha === 'undefined') ? originalA : alpha;
+        return `rgba(${r}, ${g}, ${b}, ${outA})`;
+      }
+    }
+
+    if (color[0] === '#') {
+      let hex = color.slice(1);
+      if (hex.length === 3) {
+        hex = hex.split('').map(c => c + c).join('');
+      }
+      if (hex.length === 6) {
+        const r = parseInt(hex.slice(0, 2), 16);
+        const g = parseInt(hex.slice(2, 4), 16);
+        const b = parseInt(hex.slice(4, 6), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      }
+    }
+    return `rgba(0,0,0,${alpha})`;
+  }
+
+  // selection visuals for single item
+  function setItemSelectionStyle(item, color, visible) {
+    const bg = visible ? colorToRgba(color, 0.12) : 'transparent';
+    const border = visible ? color : 'transparent';
+    item.style.background = bg;
+    item.style.borderLeft = `4px solid ${border}`;
+    item.classList.toggle('hidden', !visible);
+  }
+
+  function highlightDatasets(info, highlight) {
+    if (!info || !info.charts) return;
+    info.charts.forEach(({chart, index}) => {
+      try {
+        if (!chart || typeof index !== 'number') return;
+        chart._legendHighlightBackup = chart._legendHighlightBackup || {};
+        const key = 'ds_' + index;
+        const ds = chart.data && chart.data.datasets && chart.data.datasets[index];
+        if (!ds) return;
+
+        if (highlight) {
+          if (!chart._legendHighlightBackup[key]) {
+            chart._legendHighlightBackup[key] = {
+              borderWidth: ds.borderWidth,
+              pointRadius: ds.pointRadius,
+              borderColor: ds.borderColor,
+              backgroundColor: ds.backgroundColor,
+              tension: ds.tension
+            };
+          }
+          ds.borderWidth = (ds.borderWidth || 2) * 2.5;
+          ds.pointRadius = Math.max(2, (ds.pointRadius || 0) * 2);
+          const baseColor =
+            (Array.isArray(ds.borderColor) ? ds.borderColor[0] : ds.borderColor) ||
+            (Array.isArray(ds.backgroundColor) ? ds.backgroundColor[0] : ds.backgroundColor) ||
+            '#000';
+          try { ds.borderColor = colorToRgba(baseColor, 1); } catch (e) {}
+          try { ds.backgroundColor = colorToRgba(baseColor, 0.18); } catch (e) {}
         } else {
-            // Create link for other goals
-            const link = document.createElement('a');
-            link.href = `#goal=${goal.goal}${goal.extra || ''}`;
-            link.textContent = goal.name;
-            link.style.marginLeft = '2px';
-            link.style.marginRight = '2px';
-            link.style.textDecoration = 'none';
-            link.className = 'timeline-link';
-            container.appendChild(link);
+          const backup = chart._legendHighlightBackup[key];
+          if (backup) {
+            ds.borderWidth    = backup.borderWidth;
+            ds.pointRadius    = backup.pointRadius;
+            ds.borderColor    = backup.borderColor;
+            ds.backgroundColor = backup.backgroundColor;
+            ds.tension        = backup.tension;
+            delete chart._legendHighlightBackup[key];
+          }
+        }
+        try { chart.update('none'); } catch (e) { try { chart.update(); } catch (ee) {} }
+      } catch (e) {}
+    });
+  }
+
+  function getLatestValueForInfo(info) {
+    let total = 0;
+    let found = false;
+    try {
+      info.charts.forEach(({chart, index}) => {
+        try {
+          const ds = chart.data && chart.data.datasets && chart.data.datasets[index];
+          if (!ds) return;
+          const data = ds.data || [];
+          for (let i = data.length - 1; i >= 0; i--) {
+            const v = data[i];
+            let num = null;
+            if (v == null) continue;
+            if (typeof v === 'number') {
+              num = v;
+            } else if (typeof v === 'object') {
+              if (typeof v.y === 'number') num = v.y;
+              else if (typeof v.value === 'number') num = v.value;
+            } else if (!isNaN(Number(v))) {
+              num = Number(v);
+            }
+            if (typeof num === 'number' && !isNaN(num)) {
+              total += num;
+              found = true;
+              break;
+            }
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
+    return found ? total : null;
+  }
+
+  function formatSuffix(n) {
+    if (n == null || isNaN(n)) return '';
+    const abs  = Math.abs(n);
+    const sign = n < 0 ? '-' : '';
+    if (abs >= 1e12) return sign + Math.round((abs / 1e12) * 10) / 10 + 'T';
+    if (abs >= 1e9)  return sign + Math.round((abs / 1e9)  * 10) / 10 + 'B';
+    if (abs >= 1e6)  return sign + Math.round((abs / 1e6)  * 10) / 10 + 'M';
+    if (abs >= 1e3)  return sign + Math.round((abs / 1e3)  * 10) / 10 + 'K';
+    try {
+      return sign + (Math.round(n * 100) / 100).toLocaleString();
+    } catch (e) {
+      return sign + String(n);
+    }
+  }
+
+  const labelMap = new Map(); // label -> { color, charts: [{chart, index}] }
+  function collectFromChart(chartObj) {
+    if (!chartObj || !chartObj.data || !chartObj.data.datasets) return;
+    chartObj.data.datasets.forEach((ds, i) => {
+      const label = ds.label || `Series ${i+1}`;
+      const color = (Array.isArray(ds.borderColor) ? ds.borderColor[0] : ds.borderColor) ||
+                    (Array.isArray(ds.backgroundColor) ? ds.backgroundColor[0] : ds.backgroundColor) ||
+                    '#666';
+      if (!labelMap.has(label)) labelMap.set(label, { color: color, charts: [] });
+      labelMap.get(label).charts.push({ chart: chartObj, index: i });
+    });
+  }
+  collectFromChart(timelineChartObj);
+  collectFromChart(lineAreaChartObj);
+
+  // authoritative legend items in #legend-content
+  labelMap.forEach((info, label) => {
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.title = label;
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'legend-checkbox';
+    try { cb.style.accentColor = info.color; } catch (e) {}
+    item.appendChild(cb);
+
+    const lbl = document.createElement('span');
+    lbl.className = 'legend-label';
+    lbl.textContent = label;
+    item.appendChild(lbl);
+
+    const visible = info.charts.some(({chart, index}) => !chart.getDatasetMeta(index).hidden);
+    const whichLinesModeLocal = document.querySelector('input[name="whichLines"]:checked')?.value || 'showTop5';
+    if (whichLinesModeLocal !== 'showAll' && !visible) {
+      return;
+    }
+    setItemSelectionStyle(item, info.color, visible);
+    try { cb.checked = visible; } catch (e) {}
+
+    item.addEventListener('click', () => {
+      info.charts.forEach(({chart, index}) => {
+        const meta = chart.getDatasetMeta(index);
+        meta.hidden = !meta.hidden;
+        try { chart.update(); } catch (e) {}
+      });
+      const nowVisible = info.charts.some(({chart, index}) => !chart.getDatasetMeta(index).hidden);
+      setItemSelectionStyle(item, info.color, nowVisible);
+      try { cb.checked = nowVisible; } catch (e) {}
+
+      document.querySelectorAll('.overlay-legend [data-legend-label]').forEach((ovItem) => {
+        if ((ovItem.getAttribute('data-legend-label') || '').trim() === label) {
+          setItemSelectionStyle(ovItem, info.color, nowVisible);
         }
       });
+    });
+
+    cb.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      item.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    item.addEventListener('mouseenter', () => {
+      try { highlightDatasets(info, true); } catch (e) {}
+      try {
+        item.style.transform = 'translateY(-2px) scale(1.02)';
+        item.style.boxShadow = '0 12px 28px rgba(0,0,0,0.08)';
+      } catch (e) {}
+    });
+
+    item.addEventListener('mouseleave', () => {
+      try { highlightDatasets(info, false); } catch (e) {}
+      try {
+        item.style.transform = '';
+        item.style.boxShadow = '';
+      } catch (e) {}
+    });
+
+    item.setAttribute('data-legend-label', label);
+    legendContent.appendChild(item);
+  });
+
+  // --- "More Locations" button in floating legend --------------------------
+  try {
+    const lc = document.getElementById('legend-content');
+    if (lc) {
+      let existingMoreBtn = lc.querySelector('.legend-more-btn');
+      if (existingMoreBtn) existingMoreBtn.remove();
+
+      const existingLabels = new Set(labelMap.keys());
+      const allCountries = window._timelineCountryDataByName || {};
+      const addableCountries = Object.keys(allCountries).filter(
+        name => name && !existingLabels.has(name)
+      );
+
+      if (addableCountries.length > 0) {
+        const moreBtn = document.createElement('div');
+        moreBtn.className = 'legend-more-btn';
+        moreBtn.textContent = 'More Locations';
+        moreBtn.setAttribute('role', 'button');
+        moreBtn.tabIndex = 0;
+
+        let panel = document.getElementById('floating-legend-more-menu');
+        if (!panel) {
+          panel = document.createElement('div');
+          panel.id = 'floating-legend-more-menu';
+          panel.className = 'bottom-legend-menu';
+          panel.style.cssText = [
+            'position:fixed',
+            'display:none',
+            'min-width:200px',
+            'max-height:400px',
+            'overflow-y:auto',
+            'background:#fff',
+            'border:1px solid rgba(0,0,0,0.09)',
+            'border-radius:6px',
+            'box-shadow:0 6px 18px rgba(0,0,0,0.15)',
+            'padding:6px 4px',
+            'z-index:99999'
+          ].join(';');
+
+          const inp = document.createElement('input');
+          inp.type = 'text';
+          inp.placeholder = 'Search countries...';
+          inp.style.cssText = [
+            'width:calc(100% - 16px)',
+            'margin:8px',
+            'padding:8px',
+            'border:1px solid #ddd',
+            'border-radius:4px',
+            'font-size:13px'
+          ].join(';');
+          panel.appendChild(inp);
+
+          const list = document.createElement('div');
+          list.className = 'floating-legend-menu-list';
+          panel.appendChild(list);
+
+          document.body.appendChild(panel);
+
+          const render = (query) => {
+            list.innerHTML = '';
+            const q = (query || '').toLowerCase();
+            addableCountries
+              .filter((n) => {
+                const hasData = window._timelineCountryDataByName && window._timelineCountryDataByName[n];
+                const matchesQuery = !q || n.toLowerCase().indexOf(q) >= 0;
+                return hasData && matchesQuery;
+              })
+              .slice(0, 50)
+              .forEach((n) => {
+                const row = document.createElement('div');
+                row.className = 'bottom-legend-menu-item';
+                row.textContent = n;
+                row.style.cssText = 'padding:8px 12px;cursor:pointer;border-radius:4px;';
+                row.setAttribute('role', 'menuitem');
+                row.tabIndex = 0;
+                row.addEventListener('mouseenter', () => {
+                  row.style.background = 'rgba(0,102,255,0.1)';
+                });
+                row.addEventListener('mouseleave', () => {
+                  row.style.background = 'transparent';
+                });
+                row.addEventListener('click', () => {
+                  try {
+                    if (typeof window.addCountryToCharts === 'function') {
+                      window.addCountryToCharts(n);
+                    }
+                    panel.style.display = 'none';
+                  } catch (e) {
+                    console.error('Error adding country:', e);
+                  }
+                });
+                list.appendChild(row);
+              });
+          };
+
+          inp.addEventListener('input', () => render(inp.value));
+          render('');
+        }
+
+        const openPanel = () => {
+          try {
+            const rect = moreBtn.getBoundingClientRect();
+            panel.style.left = (rect.left + window.scrollX) + 'px';
+            panel.style.top  = (rect.bottom + window.scrollY + 6) + 'px';
+            panel.style.display = 'block';
+
+            setTimeout(() => {
+              const closePanel = (e) => {
+                if (!panel.contains(e.target) && e.target !== moreBtn) {
+                  panel.style.display = 'none';
+                  document.removeEventListener('click', closePanel);
+                }
+              };
+              document.addEventListener('click', closePanel);
+            }, 100);
+          } catch (e) {
+            console.error('Error opening panel:', e);
+          }
+        };
+
+        moreBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openPanel();
+        });
+
+        moreBtn.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openPanel();
+          }
+        });
+
+        lc.appendChild(moreBtn);
+      }
     }
-  
-    // Run on load and hash change
-    document.addEventListener('DOMContentLoaded', updateTimelineNav);
-    window.addEventListener('hashchange', updateTimelineNav);
-  </script>
+  } catch (e) {
+    console.error('Error adding More Locations to floating legend:', e);
+  }
 
-  <div style="float:right">
-    <div class="local btn btn-primary" onclick="location.href='/realitystream/#' + window.location.hash.substr(1); return false;" style="display:none;min-width:133px;font-size:15px;border:none;">
-                RealityStream
-            </div>
-  </div>
-  <div style="overflow:visible;">
+  // Append numeric values in floating legend
+  try {
+    Array.from(legendContent.children).forEach((child) => {
+      const label = child.getAttribute('data-legend-label') || child.title || child.textContent.trim();
+      const info  = labelMap.get(label);
+      const latest = info ? getLatestValueForInfo(info) : null;
+      let vs = child.querySelector('.legend-value');
+      if (!vs) {
+        vs = document.createElement('span');
+        vs.className = 'legend-value';
+        vs.style.marginLeft = '8px';
+        vs.style.fontSize   = '12px';
+        vs.style.opacity    = '0.9';
+        child.appendChild(vs);
+      }
+      vs.textContent = latest != null ? formatSuffix(latest) : '';
+      if (latest != null) vs.title = String(latest);
+    });
+  } catch (e) {}
 
-      <div id="relocatedScopeMenu" style="float:left"></div>
-      <div id="template-container"></div>
-      <div id="templateLoaded"></div>
-     
-      <!-- We might not use the same state menu as the search filter.
-      <div id="relocatedStateMenu"></div>
-      -->
-      <div class="chart-controls" style="display:flex; flex-wrap:wrap; gap:10px;">
-        <select id="entityId">
-            <option value="geoId/01">Alabama</option>
-            <option value="geoId/02">Alaska</option>
-            <option value="geoId/04">Arizona</option>
-            <option value="geoId/05">Arkansas</option>
-            <option value="geoId/06">California</option>
-            <option value="geoId/08">Colorado</option>
-            <option value="geoId/09">Connecticut</option>
-            <option value="geoId/10">Delaware</option>
-            <option value="geoId/11">District of Columbia</option>
-            <option value="geoId/12">Florida</option>
-            <option value="geoId/13" selected>Georgia</option>
-            <option value="geoId/15">Hawaii</option>
-            <option value="geoId/16">Idaho</option>
-            <option value="geoId/17">Illinois</option>
-            <option value="geoId/18">Indiana</option>
-            <option value="geoId/19">Iowa</option>
-            <option value="geoId/20">Kansas</option>
-            <option value="geoId/21">Kentucky</option>
-            <option value="geoId/22">Louisiana</option>
-            <option value="geoId/23">Maine</option>
-            <option value="geoId/24">Maryland</option>
-            <option value="geoId/25">Massachusetts</option>
-            <option value="geoId/26">Michigan</option>
-            <option value="geoId/27">Minnesota</option>
-            <option value="geoId/28">Mississippi</option>
-            <option value="geoId/29">Missouri</option>
-            <option value="geoId/30">Montana</option>
-            <option value="geoId/31">Nebraska</option>
-            <option value="geoId/32">Nevada</option>
-            <option value="geoId/33">New Hampshire</option>
-            <option value="geoId/34">New Jersey</option>
-            <option value="geoId/35">New Mexico</option>
-            <option value="geoId/36">New York</option>
-            <option value="geoId/37">North Carolina</option>
-            <option value="geoId/38">North Dakota</option>
-            <option value="geoId/39">Ohio</option>
-            <option value="geoId/40">Oklahoma</option>
-            <option value="geoId/41">Oregon</option>
-            <option value="geoId/42">Pennsylvania</option>
-            <option value="geoId/44">Rhode Island</option>
-            <option value="geoId/45">South Carolina</option>
-            <option value="geoId/46">South Dakota</option>
-            <option value="geoId/47">Tennessee</option>
-            <option value="geoId/48">Texas</option>
-            <option value="geoId/49">Utah</option>
-            <option value="geoId/50">Vermont</option>
-            <option value="geoId/51">Virginia</option>
-            <option value="geoId/53">Washington</option>
-            <option value="geoId/54">West Virginia</option>
-            <option value="geoId/55">Wisconsin</option>
-            <option value="geoId/56">Wyoming</option>
-            <option value="geoId/72">Puerto Rico</option>
-        </select>
-     
-       <!--
-          Adjust to per capita (and SqMiles) using our nav filter file:
-          https://github.com/ModelEarth/localsite/blob/main/info/data/map-filters/us-states.csv
+  // --- overlay legends (single combined overlay) ---------------------------
+  const SCOPE_TITLES = {
+    country: 'Countries',
+    state:   'States',
+    county:  'Counties'
+  };
 
-          Or call the API directly for the additional info (population and sq miles)
+  function getScopeKeyFromHash() {
+    try {
+      const h = window.location.hash ? new URLSearchParams(window.location.hash.substring(1)) : null;
+      if (h) {
+        const geoview = (h.get('scope') || '').toLowerCase();
+        if (geoview === 'countries' || geoview === 'country' || geoview === 'earth') return 'country';
+        if (geoview === 'states' || geoview === 'state') return 'state';
+        if (geoview === 'counties' || geoview === 'county') return 'county';
+        if (h.get('state')) return 'state';
+        const geo = h.get('geo') || h.get('geoIds') || h.get('geo_id');
+        if (geo && geo.indexOf(',') >= 0) {
+          const tokens = geo.split(',').map(s => s.trim()).filter(Boolean);
+          const numericCount = tokens.filter(t => /^\d+$/.test(t)).length;
+          const usFipsLike   = tokens.filter(t => /^US\d{2,}/i.test(t)).length;
+          if (tokens.length > 2 && (numericCount > 2 || usFipsLike > 0)) return 'county';
+        }
+      }
+    } catch (e) {}
+    try {
+      const select = document.getElementById('entityId');
+      if (select && select.value) {
+        const val = String(select.value).trim();
+        if (val.indexOf('geoId/') === 0 || /^geoId:\/\//i.test(val)) return 'state';
+        if (/^[A-Za-z]{2}$/.test(val)) return 'country';
+        if (val.toLowerCase().indexOf('country') >= 0) return 'country';
+      }
+    } catch (e) {}
+    return 'country';
+  }
 
-          show=Count_Person
+  function getOverlayTitleText() {
+    const key = getScopeKeyFromHash();
+    return SCOPE_TITLES[key] || '';
+  }
 
-          Convert 2-char state to geoId/01 in earthscape.js
-      -->
+  function ensureOverlay(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return null;
 
-        <select id="chartVariable" style="max-width:380px;"></select>
-      </div>
-  
-        <br>
-        
-        <div class="whichLinesHolder" style="float:left; display: flex;">
-          <label> <input value="showAll" type="radio" name="whichLines" />All &nbsp;</label>
-          <div class="scope-country">
-              <label> <input value="showSelected" type="radio" name="whichLines"/>Top Economics &nbsp;</label>
-          </div>
-          <label> <input value="showTop5" type="radio" name="whichLines" checked />Top 5 &nbsp;</label>
-          <label> <input value="showBottom5" type="radio" name="whichLines" />Bottom 5 &nbsp;</label>
-        </div>
+    try { tidyOverlayLegends(); } catch (e) {}
 
-        <div id="perCapitaOptions" style="float:right">
-            <label> <input value="totals" type="radio" name="whichPer" checked  />Totals </label>
-            <label> <input value="percapita" type="radio" name="whichPer" />Per Capita </label>
-            <!--
-            <label> <input value="perarea" type="radio" name="whichPer" />Per Area </label>
-            -->
-        </div>
+    const heroRoot = document.querySelector('.heroTransparent.notdark') ||
+                     document.querySelector('.heroTransparent') ||
+                     container;
 
-        <!-- Chart Size Controls -->
-        <div style="clear: both; margin: 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6;">
-            <h4 style="margin: 0 0 15px 0; color: #495057; font-size: 16px;">Chart Size Controls</h4>
-            <div style="display: flex; align-items: center; gap: 20px; flex-wrap: wrap;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <label for="widthSlider" style="font-weight: 500; min-width: 50px;">Width:</label>
-                    <input type="range" id="widthSlider" min="300" max="1200" value="800" step="10" 
-                           style="width: 150px;" oninput="updateChartSize()">
-                    <span id="widthValue" style="min-width: 50px; font-family: monospace;">800px</span>
-                </div>
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <label for="heightSlider" style="font-weight: 500; min-width: 50px;">Height:</label>
-                    <input type="range" id="heightSlider" min="200" max="800" value="400" step="10" 
-                           style="width: 150px;" oninput="updateChartSize()">
-                    <span id="heightValue" style="min-width: 50px; font-family: monospace;">400px</span>
-                </div>
-                <button onclick="resetChartSize()" 
-                        style="padding: 8px 16px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">
-                    Reset to Auto
-                </button>
-            </div>
-        </div>
-
-        <div id="div1" class="toogleDiv" chart-wrapper>
-            <canvas id="timelineChart" ></canvas>
-            <div id="floating-legend" aria-hidden="false" style="display:none"><div id="legend-content"></div></div>
-        </div>
-        <div id="div2" class="toogleDiv" chart-wrapper>
-            <canvas id="lineAreaChart" ></canvas>
-        </div>
-
-        <label>
-            <input type="radio" name="toogleChartType" value="div1" checked> Line Chart
-        </label>
-        <label>
-            <input type="radio" name="toogleChartType" value="div2"> Area Chart
-        </label>
-        <label>
-            <input type="radio" name="toogleChartType" value="both"> Both
-        </label>
-    </div>
-
-</div>
-</div>
-<!-- /heroTransparent -->
-
-<div class="content contentpadding large-list">
-  <div id="readmeDiv"></div>
-</div>
-<script>
-    document.addEventListener('DOMContentLoaded', () => {
-        let hash = getHash(); // Defaulted to country above.
-        const perCapitaOptions = document.getElementById('perCapitaOptions');
-        //const perCapitaTableSection = document.getElementById('perCapitaTableSection');
-        
-        if (hash.goal === "health") {
-            perCapitaOptions.style.display = 'none'; // Hide Per Capita options for health
-            //perCapitaTableSection.style.display = 'none'; // Hide Per Capita table for health
+    let ov = null;
+    try {
+      const existing = Array.from(document.querySelectorAll(`.overlay-legend[data-overlay-for="${containerId}"]`));
+      if (existing.length > 0) {
+        ov = existing[0];
+        for (let i = 1; i < existing.length; i++) {
+          try { existing[i].remove(); } catch (e) {}
+        }
+      } else {
+        const orphans = Array.from(heroRoot.querySelectorAll('.overlay-legend:not([data-overlay-for])'));
+        if (orphans.length === 1) {
+          ov = orphans[0];
+          ov.setAttribute('data-overlay-for', containerId);
         } else {
-            perCapitaOptions.style.display = 'block'; // Show Per Capita options for other pages
-            //perCapitaTableSection.style.display = 'block'; // Show Per Capita table for other pages
+          ov = container.querySelector(`.overlay-legend[data-overlay-for="${containerId}"]`) ||
+               container.querySelector('.overlay-legend');
         }
-    });
-</script>
-<script>
-    // Add event listener to radio buttons to call toggleDivs() on change
-    // Has to reside after toogleChartType html above.
-    document.querySelectorAll('input[name="toogleChartType"]').forEach((radio) => {
-        radio.addEventListener('change', () => { toggleDivs(); try { if (typeof buildFloatingLegendFromChart === 'function') buildFloatingLegendFromChart(); } catch (e) { console.warn('legend rebuild failed on toggle:', e); } });
-    });
-    // Show the first div by default on page load
-    toggleDivs();
-</script>
-<script>
-// Floating legend helper for Chart.js timelineChart
-function buildFloatingLegendFromChart() {
-    const canvas = document.getElementById('timelineChart');
-    // Tidy up any duplicate overlays before building
-    try { tidyOverlayLegends(); } catch (e) { /* ignore */ }
-    if (!canvas || typeof Chart === 'undefined') return false;
-    // Decide which chart(s) to build the legend for based on the chart-type toggle
-    const selectedToggle = document.querySelector('input[name="toogleChartType"]:checked')?.value || 'div1';
-    const timelineCanvas = document.getElementById('timelineChart');
-    const lineAreaCanvas = document.getElementById('lineAreaChart');
-    const timelineChartObj = (timelineCanvas && (Chart.getChart(timelineCanvas) || timelineCanvas.__chart__));
-    const lineAreaChartObj = (lineAreaCanvas && (Chart.getChart(lineAreaCanvas) || lineAreaCanvas.__chart__));
-
-    if (!timelineChartObj && !lineAreaChartObj) return false;
-
-    // Turn off built-in legend on both charts if present
-    [timelineChartObj, lineAreaChartObj].forEach((c) => {
-        if (!c) return;
-        try {
-            if (!c.options) c.options = {};
-            if (!c.options.plugins) c.options.plugins = {};
-            c.options.plugins.legend = { display: false };
-            try { c.update(); } catch (e) { /* ignore update errors */ }
-        } catch (e) { console.warn('Could not set built-in legend display:', e); }
-    });
-
-    const legend = document.getElementById('floating-legend');
-    if (!legend) return true;
-    const legendContent = document.getElementById('legend-content');
-    if (!legendContent) return true;
-    legendContent.innerHTML = '';
-
-    // Count datasets across available charts for diagnostics
-    const timelineCount = (timelineChartObj && timelineChartObj.data && timelineChartObj.data.datasets) ? timelineChartObj.data.datasets.length : 0;
-    const areaCount = (lineAreaChartObj && lineAreaChartObj.data && lineAreaChartObj.data.datasets) ? lineAreaChartObj.data.datasets.length : 0;
-    const datasetCount = timelineCount + areaCount;
-    // Determine selected chart count based on toggle
-    const selectedCount = (selectedToggle === 'div2') ? areaCount : (selectedToggle === 'both' ? datasetCount : timelineCount);
-    console.log('buildFloatingLegendFromChart: toggle=', selectedToggle, 'timeline=', timelineCount, 'area=', areaCount, 'selectedCount=', selectedCount);
-
-    // Which-lines mode (controls which series are shown): showAll, showSelected, showTop5, showBottom5
-    const whichLinesMode = document.querySelector('input[name="whichLines"]:checked')?.value || 'showTop5';
-
-    // Helper to convert various color formats into an rgba(...) string with given alpha
-    function colorToRgba(color, alpha) {
-        alpha = (typeof alpha === 'number') ? alpha : 0.12;
-        if (!color) return `rgba(0,0,0,${alpha})`;
-        color = String(color).trim();
-        // rgb(...) -> rgba(...)
-        if (color.indexOf('rgb(') === 0) {
-            return color.replace('rgb(', 'rgba(').replace(')', `,${alpha})`);
-        }
-        // rgba(...) -> override alpha
-        if (color.indexOf('rgba(') === 0) {
-            const parts = color.match(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)/);
-            if (parts) return `rgba(${parts[1]}, ${parts[2]}, ${parts[3]}, ${alpha})`;
-        }
-        // hsl(...) or hsla(...) -> convert to rgba
-        if (color.toLowerCase().indexOf('hsl(') === 0 || color.toLowerCase().indexOf('hsla(') === 0) {
-            const parts = color.match(/hsla?\(\s*([0-9.+-]+)\s*,\s*([0-9.+-]+)%\s*,\s*([0-9.+-]+)%\s*(?:,\s*([0-9.+-]+)\s*)?\)/i);
-            if (parts) {
-                let h = parseFloat(parts[1]);
-                let s = parseFloat(parts[2]) / 100;
-                let l = parseFloat(parts[3]) / 100;
-                // parse original alpha if present
-                let originalA = (typeof parts[4] !== 'undefined') ? parseFloat(parts[4]) : null;
-                // convert HSL to RGB
-                function hslToRgb(h, s, l) {
-                    h = ((h % 360) + 360) % 360 / 360; // normalize to [0,1]
-                    let r, g, b;
-                    if (s === 0) {
-                        r = g = b = l; // achromatic
-                    } else {
-                        const hue2rgb = (p, q, t) => {
-                            if (t < 0) t += 1;
-                            if (t > 1) t -= 1;
-                            if (t < 1/6) return p + (q - p) * 6 * t;
-                            if (t < 1/2) return q;
-                            if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
-                            return p;
-                        };
-                        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-                        const p = 2 * l - q;
-                        r = hue2rgb(p, q, h + 1/3);
-                        g = hue2rgb(p, q, h);
-                        b = hue2rgb(p, q, h - 1/3);
-                    }
-                    return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
-                }
-                const [r, g, b] = hslToRgb(h, s, l);
-                // if original had an alpha and caller didn't pass an explicit alpha, use it
-                const outA = (originalA !== null && typeof alpha === 'undefined') ? originalA : alpha;
-                return `rgba(${r}, ${g}, ${b}, ${outA})`;
-            }
-        }
-        // Hex formats #rrggbb or #rgb
-        if (color[0] === '#') {
-            let hex = color.slice(1);
-            if (hex.length === 3) {
-                hex = hex.split('').map(c => c + c).join('');
-            }
-            if (hex.length === 6) {
-                const r = parseInt(hex.slice(0,2), 16);
-                const g = parseInt(hex.slice(2,4), 16);
-                const b = parseInt(hex.slice(4,6), 16);
-                return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-            }
-        }
-        // Fallback: return the original color (may be a named color) with alpha applied via rgba(0,0,0,alpha) overlay
-        return `rgba(0,0,0,${alpha})`;
-    }
-
-    // Apply selection visuals to a legend item
-    function setItemSelectionStyle(item, color, visible) {
-        const bg = visible ? colorToRgba(color, 0.12) : 'transparent';
-        const border = visible ? color : 'transparent';
-        item.style.background = bg;
-        item.style.borderLeft = `4px solid ${border}`;
-        item.classList.toggle('hidden', !visible);
-    }
-
-    // Highlight datasets for a given info object when hovering a legend item
-    function highlightDatasets(info, highlight) {
-        if (!info || !info.charts) return;
-        info.charts.forEach(({chart, index}) => {
-            try {
-                if (!chart || typeof index !== 'number') return;
-                // Prepare backup storage on the chart object
-                chart._legendHighlightBackup = chart._legendHighlightBackup || {};
-                const key = 'ds_' + index;
-                if (highlight) {
-                    // Backup original dataset props if not already backed up
-                    if (!chart._legendHighlightBackup[key]) {
-                        const ds = chart.data && chart.data.datasets && chart.data.datasets[index];
-                        chart._legendHighlightBackup[key] = ds ? {
-                            borderWidth: ds.borderWidth,
-                            pointRadius: ds.pointRadius,
-                            borderColor: ds.borderColor,
-                            backgroundColor: ds.backgroundColor,
-                            tension: ds.tension
-                        } : null;
-                    }
-                    // Emphasize the dataset
-                    const ds = chart.data && chart.data.datasets && chart.data.datasets[index];
-                    if (ds) {
-                        ds.borderWidth = (ds.borderWidth || 2) * 2.5;
-                        ds.pointRadius = Math.max(2, (ds.pointRadius || 0) * 2);
-                        // Make border/background fully opaque using colorToRgba
-                        try { ds.borderColor = colorToRgba((Array.isArray(ds.borderColor) ? ds.borderColor[0] : ds.borderColor) || ds.backgroundColor || '#000', 1); } catch (e) {}
-                        try { ds.backgroundColor = colorToRgba((Array.isArray(ds.backgroundColor) ? ds.backgroundColor[0] : ds.backgroundColor) || ds.borderColor || '#000', 0.18); } catch (e) {}
-                    }
-                } else {
-                    // Restore original props
-                    const backup = chart._legendHighlightBackup && chart._legendHighlightBackup[key];
-                    const ds = chart.data && chart.data.datasets && chart.data.datasets[index];
-                    if (backup && ds) {
-                        ds.borderWidth = backup.borderWidth;
-                        ds.pointRadius = backup.pointRadius;
-                        ds.borderColor = backup.borderColor;
-                        ds.backgroundColor = backup.backgroundColor;
-                        ds.tension = backup.tension;
-                        // Remove backup object
-                        try { delete chart._legendHighlightBackup[key]; } catch (e) {}
-                    }
-                }
-                // For performance, update chart without animation
-                try { chart.update('none'); } catch (e) { try { chart.update(); } catch (ee) { /* ignore */ } }
-            } catch (e) { /* ignore per-chart highlight errors */ }
-        });
-    }
-
-    // Helper: get the latest numeric value for an info entry
-    function getLatestValueForInfo(info) {
-        // Sum latest numeric values across any chart datasets for this label
-        let total = 0;
-        let found = false;
-        try {
-            info.charts.forEach(({chart, index}) => {
-                try {
-                    const ds = chart.data && chart.data.datasets && chart.data.datasets[index];
-                    if (!ds) return;
-                    const data = ds.data || [];
-                    // walk from end to find last numeric-ish value
-                    for (let i = data.length - 1; i >= 0; i--) {
-                        const v = data[i];
-                        let num = null;
-                        if (v == null) continue;
-                        if (typeof v === 'number') num = v;
-                        else if (typeof v === 'object') {
-                            if (typeof v.y === 'number') num = v.y;
-                            else if (typeof v.value === 'number') num = v.value;
-                        } else if (!isNaN(Number(v))) {
-                            num = Number(v);
-                        }
-                        if (typeof num === 'number' && !isNaN(num)) {
-                            total += num;
-                            found = true;
-                            break; // only take latest for this dataset
-                        }
-                    }
-                } catch (e) { /* ignore dataset errors */ }
-            });
-        } catch (e) { /* ignore */ }
-        return found ? total : null;
-    }
-
-    // Format a number using suffixes: T (trillions), B (billions), M (millions), K (thousands)
-    function formatSuffix(n) {
-        if (n == null || isNaN(n)) return '';
-        const abs = Math.abs(n);
-        const sign = n < 0 ? '-' : '';
-        if (abs >= 1e12) {
-            const v = Math.round((abs / 1e12) * 10) / 10; // 1 decimal
-            return sign + v + 'T';
-        }
-        if (abs >= 1e9) {
-            const v = Math.round((abs / 1e9) * 10) / 10;
-            return sign + v + 'B';
-        }
-        if (abs >= 1e6) {
-            const v = Math.round((abs / 1e6) * 10) / 10;
-            return sign + v + 'M';
-        }
-        if (abs >= 1e3) {
-            const v = Math.round((abs / 1e3) * 10) / 10;
-            return sign + v + 'K';
-        }
-        // For smaller numbers, show with commas (and up to 2 decimals)
-        try {
-            return sign + (Math.round(n * 100) / 100).toLocaleString();
-        } catch (e) { return sign + String(n); }
-    }
-
-    // Unified legend: merge dataset labels across both charts so each country appears once
-    const labelMap = new Map(); // label -> { color, charts: [{chart, index}] }
-    function collectFromChart(chartObj) {
-        if (!chartObj || !chartObj.data || !chartObj.data.datasets) return;
-        chartObj.data.datasets.forEach((ds, i) => {
-            const label = ds.label || `Series ${i+1}`;
-            const color = (Array.isArray(ds.borderColor) ? ds.borderColor[0] : ds.borderColor) || (Array.isArray(ds.backgroundColor) ? ds.backgroundColor[0] : ds.backgroundColor) || '#666';
-            if (!labelMap.has(label)) labelMap.set(label, { color: color, charts: [] });
-            labelMap.get(label).charts.push({ chart: chartObj, index: i });
-        });
-    }
-    collectFromChart(timelineChartObj);
-    collectFromChart(lineAreaChartObj);
-
-    // Build unified legend items (authoritative in #legend-content)
-    labelMap.forEach((info, label) => {
-        const item = document.createElement('div');
-        item.className = 'legend-item';
-        item.title = label;
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.className = 'legend-checkbox';
-        try { cb.style.accentColor = info.color; } catch (e) {}
-        item.appendChild(cb);
-        const lbl = document.createElement('span');
-        lbl.className = 'legend-label';
-        lbl.textContent = label;
-        item.appendChild(lbl);
-
-        // initialize selection visuals: visible if at least one chart has dataset visible
-        const visible = info.charts.some(({chart, index}) => !chart.getDatasetMeta(index).hidden);
-        // If not showing all series, omit items that are currently not visible
-        const whichLinesModeLocal = document.querySelector('input[name="whichLines"]:checked')?.value || 'showTop5';
-        if (whichLinesModeLocal !== 'showAll' && !visible) {
-            return; // don't add this legend item
-        }
-        setItemSelectionStyle(item, info.color, visible);
-        try { cb.checked = visible; } catch (e) {}
-        // NOTE: value indicator will be shown only in the floating legend; do not append here
-
-        // Toggle handler: toggles the dataset in all charts where it exists
-        item.addEventListener('click', (ev) => {
-            info.charts.forEach(({chart, index}) => {
-                const meta = chart.getDatasetMeta(index);
-                meta.hidden = !meta.hidden;
-                try { chart.update(); } catch (e) {}
-            });
-            const nowVisible = info.charts.some(({chart, index}) => !chart.getDatasetMeta(index).hidden);
-            setItemSelectionStyle(item, info.color, nowVisible);
-            try { cb.checked = nowVisible; } catch (e) {}
-            // Also refresh overlay clones visuals to reflect the change
-            document.querySelectorAll('.overlay-legend').forEach((ov) => {
-                const clone = ov.querySelector(`[data-legend-label="${CSS.escape(label)}"]`);
-                if (clone) setItemSelectionStyle(clone, info.color, nowVisible);
-            });
-        });
-        cb.addEventListener('click', (ev) => { try { ev.stopPropagation(); } catch (e) {} try { item.dispatchEvent(new MouseEvent('click', { bubbles: true })); } catch (e) {} });
-
-        // Hover handlers: highlight corresponding chart curves when hovering legend items
-        item.addEventListener('mouseenter', (ev) => {
-            try { highlightDatasets(info, true); } catch (e) { /* ignore */ }
-            // also visually emphasize the legend item
-            try { item.style.transform = 'translateY(-2px) scale(1.02)'; item.style.boxShadow = '0 12px 28px rgba(0,0,0,0.08)'; } catch (e) {}
-        });
-        item.addEventListener('mouseleave', (ev) => {
-            try { highlightDatasets(info, false); } catch (e) { /* ignore */ }
-            try { item.style.transform = ''; item.style.boxShadow = ''; } catch (e) {}
-        });
-
-        // Tag for cloning into overlays
-        item.setAttribute('data-legend-label', label);
-        legendContent.appendChild(item);
-    });
-            try {
-        const legendContent = document.getElementById('legend-content');
-        if (legendContent) {
-            // Check if More Locations button already exists
-            let existingMoreBtn = legendContent.querySelector('.legend-more-btn');
-            if (existingMoreBtn) {
-                existingMoreBtn.remove();
-            }
-            
-            // Get list of countries already displayed
-            const existingLabels = new Set(
-                Array.from(labelMap.keys())
-            );
-            
-            // Get all available countries
-            const allCountries = window._timelineCountryDataByName || {};
-            const addableCountries = Object.keys(allCountries).filter(
-                name => name && !existingLabels.has(name)
-            );
-            
-            // Only show button if there are countries to add
-            if (addableCountries.length > 0) {
-                const moreBtn = document.createElement('div');
-                moreBtn.className = 'legend-more-btn';
-                moreBtn.style.cssText = `
-                    margin-top: 8px;
-                    padding: 8px 12px;
-                    background: #0066ff;
-                    color: white;
-                    border-radius: 6px;
-                    text-align: center;
-                    cursor: pointer;
-                    font-weight: bold;
-                    font-size: 12px;
-                    pointer-events: auto;
-                `;
-                moreBtn.textContent = `More Locations`;
-                moreBtn.setAttribute('role', 'button');
-                moreBtn.tabIndex = 0;
-                
-                // Create popup menu (same as bottom legend)
-                let panel = document.getElementById('floating-legend-more-menu');
-                if (!panel) {
-                    panel = document.createElement('div');
-                    panel.id = 'floating-legend-more-menu';
-                    panel.className = 'bottom-legend-menu';
-                    panel.style.cssText = `
-                        position: fixed;
-                        display: none;
-                        min-width: 200px;
-                        max-height: 400px;
-                        overflow-y: auto;
-                        background: white;
-                        border: 1px solid rgba(0,0,0,0.09);
-                        border-radius: 6px;
-                        box-shadow: 0 6px 18px rgba(0,0,0,0.15);
-                        padding: 6px 4px;
-                        z-index: 99999;
-                    `;
-                    
-                    const inp = document.createElement('input');
-                    inp.type = 'text';
-                    inp.placeholder = 'Search countries...';
-                    inp.style.cssText = `
-                        width: calc(100% - 16px);
-                        margin: 8px;
-                        padding: 8px;
-                        border: 1px solid #ddd;
-                        border-radius: 4px;
-                        font-size: 13px;
-                    `;
-                    panel.appendChild(inp);
-                    
-                    const list = document.createElement('div');
-                    list.className = 'floating-legend-menu-list';
-                    panel.appendChild(list);
-                    
-                    document.body.appendChild(panel);
-                    
-                    const render = (query) => {
-                        list.innerHTML = '';
-                        const q = (query || '').toLowerCase();
-                        addableCountries.filter((n) => {
-                            // Only show countries that have actual timeline data
-                            const hasData = window._timelineCountryDataByName && window._timelineCountryDataByName[n];
-                            const matchesQuery = !q || n.toLowerCase().indexOf(q) >= 0;
-                            return hasData && matchesQuery;
-                        }).slice(0, 50).forEach((n) => {
-                            const row = document.createElement('div');
-                            row.className = 'bottom-legend-menu-item';
-                            row.textContent = n;
-                            row.style.cssText = `
-                                padding: 8px 12px;
-                                cursor: pointer;
-                                border-radius: 4px;
-                            `;
-                            row.setAttribute('role', 'menuitem');
-                            row.tabIndex = 0;
-                            
-                            row.addEventListener('mouseenter', () => {
-                                row.style.background = 'rgba(0,102,255,0.1)';
-                            });
-                            row.addEventListener('mouseleave', () => {
-                                row.style.background = 'transparent';
-                            });
-                            
-                            row.addEventListener('click', () => {
-                                try {
-                                    if (typeof window.addCountryToCharts === 'function') {
-                                        window.addCountryToCharts(n);
-                                    }
-                                    panel.style.display = 'none';
-                                } catch (e) {
-                                    console.error('Error adding country:', e);
-                                }
-                            });
-                            list.appendChild(row);
-                        });
-                    };
-                    
-                    inp.addEventListener('input', () => render(inp.value));
-                    render('');
-                }
-                
-                const openPanel = () => {
-                    try {
-                        const rect = moreBtn.getBoundingClientRect();
-                        panel.style.left = (rect.left + window.scrollX) + 'px';
-                        panel.style.top = (rect.bottom + window.scrollY + 6) + 'px';
-                        panel.style.display = 'block';
-                        
-                        // Close panel when clicking outside
-                        setTimeout(() => {
-                            const closePanel = (e) => {
-                                if (!panel.contains(e.target) && e.target !== moreBtn) {
-                                    panel.style.display = 'none';
-                                    document.removeEventListener('click', closePanel);
-                                }
-                            };
-                            document.addEventListener('click', closePanel);
-                        }, 100);
-                    } catch (e) {
-                        console.error('Error opening panel:', e);
-                    }
-                };
-                
-                moreBtn.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    openPanel();
-                });
-                
-                moreBtn.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        openPanel();
-                    }
-                });
-                
-                moreBtn.addEventListener('mouseenter', () => {
-                    moreBtn.style.background = '#0052cc';
-                    moreBtn.style.transform = 'translateY(-1px)';
-                });
-                
-                moreBtn.addEventListener('mouseleave', () => {
-                    moreBtn.style.background = '#0066ff';
-                    moreBtn.style.transform = 'none';
-                });
-                
-                legendContent.appendChild(moreBtn);
-            }
-        }
+      }
     } catch (e) {
-        console.error('Error adding More Locations to floating legend:', e);
+      ov = container.querySelector('.overlay-legend');
     }
 
-        // Populate value spans inside the floating legend authoritative items (#legend-content)
-        try {
-            Array.from(legendContent.children).forEach((child) => {
-                try {
-                    const label = child.getAttribute('data-legend-label') || child.title || child.textContent.trim();
-                    const info = labelMap.get(label);
-                    const latest = info ? getLatestValueForInfo(info) : null;
-                    let vs = child.querySelector('.legend-value');
-                    if (!vs) {
-                        vs = document.createElement('span');
-                        vs.className = 'legend-value';
-                        vs.style.marginLeft = '8px';
-                        vs.style.fontSize = '12px';
-                        vs.style.opacity = '0.9';
-                        child.appendChild(vs);
-                    }
-                    vs.textContent = latest != null ? formatSuffix(latest) : '';
-                    if (latest != null) vs.setAttribute('title', String(latest));
-                } catch (e) { /* ignore per-item */ }
-            });
-        } catch (e) { /* ignore */ }
+    if (!ov) {
+      ov = document.createElement('div');
+      ov.className = 'overlay-legend';
+      ov.setAttribute('data-overlay-for', containerId);
 
-    // Populate per-chart overlay legends by cloning authoritative items
-    // Map of scope keys to human-readable overlay title
-    const SCOPE_TITLES = {
-        country: 'Countries',
-        state: 'States',
-        county: 'Counties'
+      const title = document.createElement('div');
+      title.className = 'overlay-legend-title';
+
+      const titleTextSpan = document.createElement('span');
+      titleTextSpan.className = 'overlay-legend-title-text';
+      titleTextSpan.textContent = getOverlayTitleText();
+      title.appendChild(titleTextSpan);
+
+      const closeBtnInit = document.createElement('button');
+      closeBtnInit.className = 'overlay-legend-close';
+      closeBtnInit.title = 'Close legend';
+      closeBtnInit.innerHTML = '✕';
+      closeBtnInit.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        ov.style.display = 'none';
+        ov.setAttribute('aria-hidden', 'true');
+        try {
+          const fixedLegend = document.getElementById('floating-legend');
+          if (fixedLegend) {
+            fixedLegend.style.display = 'none';
+            fixedLegend.setAttribute('aria-hidden', 'true');
+          }
+        } catch (e) {}
+        try { checkForClosedOverlays(); } catch (e) {}
+      });
+      title.appendChild(closeBtnInit);
+
+      ov.appendChild(title);
+
+      const inner = document.createElement('div');
+      inner.className = 'overlay-legend-content';
+      ov.appendChild(inner);
+
+      try { heroRoot.style.position = heroRoot.style.position || 'relative'; } catch (e) {}
+      try { heroRoot.appendChild(ov); } catch (e) { try { container.appendChild(ov); } catch (ee) {} }
+
+      try { makeOverlayDraggable(ov, containerId); } catch (e) {}
+    }
+
+    try {
+      const tspan = ov.querySelector('.overlay-legend-title-text');
+      if (tspan) {
+        tspan.textContent = getOverlayTitleText();
+      }
+    } catch (e) {}
+
+    try { makeOverlayDraggable(ov, containerId); } catch (e) {}
+
+    return ov.querySelector('.overlay-legend-content');
+  }
+
+  function makeOverlayDraggable(ov, containerId) {
+    if (!ov || !containerId) return;
+    if (ov._draggableAttached) return;
+    ov._draggableAttached = true;
+
+    const container = ov.parentElement || document.getElementById(containerId) || document.body;
+    try { if (container) container.style.position = container.style.position || 'relative'; } catch (e) {}
+
+    const handle = ov.querySelector('.overlay-legend-title') || ov;
+    handle.style.cursor = 'move';
+
+    try {
+      const key = 'overlayPos_' + containerId;
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const pos = JSON.parse(raw);
+        if (typeof pos.left !== 'undefined' && typeof pos.top !== 'undefined') {
+          ov.style.position = 'absolute';
+          ov.style.left = (parseFloat(pos.left) || 0) + 'px';
+          ov.style.top  = (parseFloat(pos.top)  || 0) + 'px';
+          ov.style.right = 'auto';
+        }
+      }
+    } catch (e) {}
+
+    let dragging = false;
+    let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+
+    const onPointerDown = (ev) => {
+      if (ev.button && ev.button !== 0) return;
+      ev.preventDefault();
+      dragging = true;
+      const rect = ov.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      startX = ev.clientX;
+      startY = ev.clientY;
+      startLeft = rect.left - containerRect.left + container.scrollLeft;
+      startTop  = rect.top  - containerRect.top  + container.scrollTop;
+      ov.style.position = 'absolute';
+      ov.style.right    = 'auto';
+      try { ev.target.setPointerCapture(ev.pointerId); } catch (e) {}
+      document.addEventListener('pointermove', onPointerMove);
+      document.addEventListener('pointerup',   onPointerUp);
     };
 
-    function getScopeKeyFromHash() {
-        try {
-            const h = window.location.hash ? new URLSearchParams(window.location.hash.substring(1)) : null;
-            if (h) {
-                const geoview = (h.get('scope') || '').toLowerCase();
-                if (geoview === 'countries' || geoview === 'country' || geoview === 'earth') return 'country';
-                if (geoview === 'states' || geoview === 'state') return 'state';
-                if (geoview === 'counties' || geoview === 'county') return 'county';
-                if (h.get('state')) return 'state';
-                // If geo param looks like a list of county FIPS (many commas) assume county
-                const geo = h.get('geo') || h.get('geoIds') || h.get('geo_id');
-                if (geo && geo.indexOf(',') >= 0) {
-                    // If tokens look like county FIPS (USxxxxx) or many numeric codes, treat as county
-                    const tokens = geo.split(',').map(s => s.trim()).filter(Boolean);
-                    const numericCount = tokens.filter(t => /^\d+$/.test(t)).length;
-                    const usFipsLike = tokens.filter(t => /^US\d{2,}/i.test(t)).length;
-                    if (tokens.length > 2 && (numericCount > 2 || usFipsLike > 0)) return 'county';
-                }
-            }
-        } catch (e) { /* ignore */ }
-        // Fallback: check visible controls such as #entityId
-        try {
-            const select = document.getElementById('entityId');
-            if (select && select.value) {
-                const val = String(select.value).trim();
-                // Common localsite convention: geoId/NN -> state
-                if (val.indexOf('geoId/') === 0 || /^geoId:\/\//i.test(val)) return 'state';
-                // Two-letter uppercase values likely indicate country codes (e.g. US, GB)
-                if (/^[A-Za-z]{2}$/.test(val)) return 'country';
-                // If value contains 'country' keyword, treat as country
-                if (val.toLowerCase().indexOf('country') >= 0) return 'country';
-            }
-        } catch (e) { /* ignore */ }
-        return 'country';
-    }
+    const onPointerMove = (ev) => {
+      if (!dragging) return;
+      ev.preventDefault();
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      let newLeft = startLeft + dx;
+      let newTop  = startTop  + dy;
+      try {
+        const ovRect = ov.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        const maxLeft = Math.max(0, containerRect.width  - ovRect.width);
+        const maxTop  = Math.max(0, containerRect.height - ovRect.height);
+        newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+        newTop  = Math.max(0, Math.min(newTop,  maxTop));
+      } catch (e) {}
+      ov.style.left = newLeft + 'px';
+      ov.style.top  = newTop  + 'px';
+    };
 
-    function getOverlayTitleText() {
-        const key = getScopeKeyFromHash();
-        return SCOPE_TITLES[key] || '';
-    }
+    const onPointerUp = (ev) => {
+      if (!dragging) return;
+      dragging = false;
+      try { ev.target.releasePointerCapture(ev.pointerId); } catch (e) {}
+      document.removeEventListener('pointermove', onPointerMove);
+      document.removeEventListener('pointerup',   onPointerUp);
+      try {
+        const key = 'overlayPos_' + containerId;
+        const left = parseFloat(ov.style.left || '0') || 0;
+        const top  = parseFloat(ov.style.top  || '0') || 0;
+        localStorage.setItem(key, JSON.stringify({ left, top }));
+      } catch (e) {}
+    };
 
-    function ensureOverlay(containerId) {
-        const container = document.getElementById(containerId);
-        if (!container) return null;
-        // Remove any duplicate overlays so we start from a clean state
-        try { tidyOverlayLegends(); } catch (e) { /* ignore */ }
-        // Prefer hero root for lookup since overlays are appended there for cross-chart dragging
-        const heroRoot = document.querySelector('.heroTransparent.notdark') || document.querySelector('.heroTransparent') || container;
-        // Look for existing overlays across the document that were created for this containerId
-        let ov = null;
-        try {
-            const existing = Array.from(document.querySelectorAll(`.overlay-legend[data-overlay-for="${containerId}"]`));
-            console.debug('[ensureOverlay] existing overlays for containerId=', containerId, 'count=', existing.length);
-            if (existing.length > 0) {
-                // Reuse first, remove any extras
-                ov = existing[0];
-                for (let i = 1; i < existing.length; i++) {
-                    try { existing[i].remove(); } catch (e) { /* ignore */ }
-                }
-            } else {
-                // No explicit overlay-for found; see if heroRoot has a single orphan overlay we can reclaim
-                const orphans = Array.from(heroRoot.querySelectorAll('.overlay-legend:not([data-overlay-for])'));
-                if (orphans.length === 1) {
-                    ov = orphans[0];
-                    ov.setAttribute('data-overlay-for', containerId);
-                    console.debug('[ensureOverlay] reclaimed orphan overlay for', containerId);
-                } else {
-                    // Fall back to local container check
-                    ov = container.querySelector(`.overlay-legend[data-overlay-for="${containerId}"]`) || container.querySelector('.overlay-legend');
-                }
-            }
-            console.debug('[ensureOverlay] lookup', { containerId, heroRootChildren: heroRoot.querySelectorAll('.overlay-legend').length, found: !!ov });
-        } catch (e) {
-            ov = container.querySelector('.overlay-legend');
-        }
+    handle.addEventListener('pointerdown', onPointerDown, { passive: false });
 
-        if (!ov) {
-            console.debug('[ensureOverlay] creating overlay for', containerId, 'heroRootChildrenBeforeCreate=', heroRoot.querySelectorAll('.overlay-legend').length);
-            ov = document.createElement('div');
-            ov.className = 'overlay-legend';
-            // Mark which container this overlay belongs to so future lookups find it
-            ov.setAttribute('data-overlay-for', containerId);
-            // title (bold) with title text span so a close button can be added without being removed
-            const title = document.createElement('div');
-            title.className = 'overlay-legend-title';
-            const titleTextSpan = document.createElement('span');
-            titleTextSpan.className = 'overlay-legend-title-text';
-            titleTextSpan.textContent = getOverlayTitleText();
-            title.appendChild(titleTextSpan);
-            // Add a close button immediately on creation so the overlay has an X from the start
-            try {
-                const closeBtnInit = document.createElement('button');
-                closeBtnInit.className = 'overlay-legend-close';
-                closeBtnInit.setAttribute('title', 'Close legend');
-                closeBtnInit.innerHTML = '✕';
-                closeBtnInit.addEventListener('click', (ev) => {
-                    try { ev.preventDefault(); ev.stopPropagation(); } catch (e) {}
-                    try { ov.style.display = 'none'; ov.setAttribute('aria-hidden', 'true'); } catch (e) {}
-                    try {
-                        // mark closed using the overlay's current data-overlay-for value
-                        const of = ov.getAttribute('data-overlay-for') || '';
-                        markOverlayClosed(of);
-                    } catch (e) {}
-                    // Also hide the floating fixed legend when an overlay is closed by the user
-                    try {
-                        const fixedLegend = document.getElementById('floating-legend');
-                        if (fixedLegend) {
-                            fixedLegend.style.display = 'none';
-                            fixedLegend.setAttribute('aria-hidden', 'true');
-                            try { markOverlayClosed('floating'); } catch (e) {}
-                        }
-                    } catch (e) {}
-                    try { if (typeof checkForClosedOverlays === 'function') checkForClosedOverlays(); } catch (e) {}
-                });
-                title.appendChild(closeBtnInit);
-            } catch (e) { /* ignore close button creation errors */ }
-            ov.appendChild(title);
-            const inner = document.createElement('div');
-            inner.className = 'overlay-legend-content';
-            ov.appendChild(inner);
-            // position absolute relative to chart wrapper
-            // Prefer placing overlays inside the main hero area so they can be dragged across it.
-            try { heroRoot.style.position = heroRoot.style.position || 'relative'; } catch (e) { /* ignore */ }
-            // Append overlay to the hero root so it can be moved across the entire hero area
-            try { heroRoot.appendChild(ov); } catch (e) { try { container.appendChild(ov); } catch (ee) { /* ignore */ } }
-            // make draggable and restore saved position
-            try { makeOverlayDraggable(ov, containerId); } catch (e) { /* ignore */ }
-        }
-        // Clear any closed marker when we (re)create/reuse an overlay so reopening hides the bottom legend
-        try { clearOverlayClosed(containerId); } catch (e) {}
-        // Update title each time (in case scope changed)
-        try {
-            const tspan = ov.querySelector('.overlay-legend-title-text');
-            if (tspan) tspan.textContent = getOverlayTitleText();
-            else {
-                const title = ov.querySelector('.overlay-legend-title');
-                if (title) {
-                    const s = document.createElement('span');
-                    s.className = 'overlay-legend-title-text';
-                    s.textContent = getOverlayTitleText();
-                    title.insertBefore(s, title.firstChild);
-                }
-            }
-        } catch (e) { /* ignore */ }
-        // Ensure draggable handlers are attached even for existing overlays
-        try { makeOverlayDraggable(ov, containerId); } catch (e) { /* ignore */ }
-        return ov.querySelector('.overlay-legend-content');
-    }
+    handle.addEventListener('dblclick', () => {
+      try {
+        ov.style.left = '';
+        ov.style.top  = '';
+        ov.style.right = '';
+        const key = 'overlayPos_' + containerId;
+        localStorage.removeItem(key);
+      } catch (e) {}
+    });
+  }
 
-    // Make an overlay draggable by its title. Positions are clamped within the container
-    // and persisted to localStorage under key `overlayPos_<containerId>`.
-    function makeOverlayDraggable(ov, containerId) {
-        if (!ov || !containerId) return;
-        // Avoid attaching multiple handlers
-        if (ov._draggableAttached) return;
-        ov._draggableAttached = true;
-
-    // Prefer the element the overlay is appended to (ov.parentElement), e.g. the hero root,
-    // so dragging is clamped within that root. Fall back to the original containerId element.
-    const container = ov.parentElement || document.getElementById(containerId) || document.body;
-    try { if (container) container.style.position = container.style.position || 'relative'; } catch (e) { /* ignore */ }
-
-        const handle = ov.querySelector('.overlay-legend-title') || ov;
-        handle.style.cursor = 'move';
-
-        // Restore persisted position if available
-        try {
-            const key = 'overlayPos_' + containerId;
-            const raw = localStorage.getItem(key);
-            if (raw) {
-                const pos = JSON.parse(raw);
-                if (typeof pos.left !== 'undefined' && typeof pos.top !== 'undefined') {
-                    ov.style.position = 'absolute';
-                    ov.style.left = (parseFloat(pos.left) || 0) + 'px';
-                    ov.style.top = (parseFloat(pos.top) || 0) + 'px';
-                    ov.style.right = 'auto';
-                }
-            }
-        } catch (e) { /* ignore */ }
-
-        let dragging = false;
-        let startX = 0, startY = 0, startLeft = 0, startTop = 0;
-
-        const onPointerDown = (ev) => {
-            // Only left button
-            if (ev.button && ev.button !== 0) return;
-            ev.preventDefault();
-            dragging = true;
-            const rect = ov.getBoundingClientRect();
-            const containerRect = container.getBoundingClientRect();
-            startX = ev.clientX;
-            startY = ev.clientY;
-            // Compute position relative to container
-            startLeft = rect.left - containerRect.left + container.scrollLeft;
-            startTop = rect.top - containerRect.top + container.scrollTop;
-            ov.style.position = 'absolute';
-            ov.style.right = 'auto';
-            // capture pointer if supported
-            try { if (ev.target.setPointerCapture) ev.target.setPointerCapture(ev.pointerId); } catch (e) {}
-            document.addEventListener('pointermove', onPointerMove);
-            document.addEventListener('pointerup', onPointerUp);
-        };
-
-        const onPointerMove = (ev) => {
-            if (!dragging) return;
-            ev.preventDefault();
-            const dx = ev.clientX - startX;
-            const dy = ev.clientY - startY;
-            let newLeft = startLeft + dx;
-            let newTop = startTop + dy;
-            // Clamp within container bounds
-            try {
-                const ovRect = ov.getBoundingClientRect();
-                const containerRect = container.getBoundingClientRect();
-                const maxLeft = Math.max(0, containerRect.width - ovRect.width);
-                const maxTop = Math.max(0, containerRect.height - ovRect.height);
-                newLeft = Math.max(0, Math.min(newLeft, maxLeft));
-                newTop = Math.max(0, Math.min(newTop, maxTop));
-            } catch (e) { /* ignore clamping errors */ }
-            ov.style.left = newLeft + 'px';
-            ov.style.top = newTop + 'px';
-        };
-
-        const onPointerUp = (ev) => {
-            if (!dragging) return;
-            dragging = false;
-            try { if (ev.target.releasePointerCapture) ev.target.releasePointerCapture(ev.pointerId); } catch (e) {}
-            document.removeEventListener('pointermove', onPointerMove);
-            document.removeEventListener('pointerup', onPointerUp);
-            // Persist position
-            try {
-                const key = 'overlayPos_' + containerId;
-                const left = parseFloat(ov.style.left || '0') || 0;
-                const top = parseFloat(ov.style.top || '0') || 0;
-                localStorage.setItem(key, JSON.stringify({ left: left, top: top }));
-            } catch (e) { /* ignore persistence errors */ }
-        };
-
-        handle.addEventListener('pointerdown', onPointerDown, { passive: false });
-
-        // Also allow double-click to reset position
-        handle.addEventListener('dblclick', () => {
-            try {
-                ov.style.left = '';
-                ov.style.top = '';
-                ov.style.right = '';
-                const key = 'overlayPos_' + containerId;
-                localStorage.removeItem(key);
-            } catch (e) { /* ignore */ }
+  const combinedContent = ensureOverlay('div1') || ensureOverlay('div2');
+  if (combinedContent) {
+    try {
+      const ovElem = combinedContent.closest('.overlay-legend');
+      if (ovElem) {
+        ovElem.setAttribute('data-overlay-for', 'combined');
+        document.querySelectorAll('.overlay-legend').forEach((o) => {
+          if (o !== ovElem) {
+            try { o.remove(); } catch (e) {}
+          }
         });
-    }
+      }
+    } catch (e) {}
+  }
+  if (combinedContent) combinedContent.innerHTML = '';
 
-    // Use a single combined overlay for both charts instead of separate per-chart overlays
-    // ensureOverlay expects a real container id (e.g., 'div1' or 'div2'), so create the overlay
-    // attached to an existing chart container and then mark it as the combined overlay.
-    const combinedContent = ensureOverlay('div1') || ensureOverlay('div2');
-    if (combinedContent) {
-        // rename the overlay's data-overlay-for to 'combined' so visibility logic treats it as combined
-        try {
-            const ovElem = combinedContent.closest('.overlay-legend');
-            if (ovElem) {
-                ovElem.setAttribute('data-overlay-for', 'combined');
-                // Remove any other overlay-legend elements so only the combined overlay remains
-                document.querySelectorAll('.overlay-legend').forEach((o) => {
-                    try {
-                        if (o !== ovElem) {
-                            o.remove();
-                        }
-                    } catch (e) { /* ignore */ }
-                });
-            }
-        } catch (e) { /* ignore */ }
-    }
-    // Clear previous overlay items
-    if (combinedContent) combinedContent.innerHTML = '';
+  const authoritativeItems = Array.from(legendContent.children);
+  authoritativeItems.forEach((authItem) => {
+    const label = authItem.getAttribute('data-legend-label') ||
+                  authItem.title ||
+                  authItem.textContent.trim();
+    const info = labelMap.get(label);
+    if (!info) return;
 
-    // Clone authoritative items into the single combined overlay (union of both charts)
-    const authoritativeItems = Array.from(legendContent.children);
+    const existsInAny = info.charts && info.charts.length > 0;
+    if (combinedContent && existsInAny) {
+      const clone = authItem.cloneNode(true);
+      clone.setAttribute('data-legend-label', label);
+      clone.style.pointerEvents = 'auto';
+
+      try {
+        const vs = clone.querySelectorAll('.legend-value');
+        if (vs && vs.length) vs.forEach((v) => v.remove());
+      } catch (e) {}
+
+      clone.addEventListener('click', () => {
+        authItem.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+      clone.addEventListener('mouseenter', () => {
+        authItem.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      });
+      clone.addEventListener('mouseleave', () => {
+        authItem.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+      });
+
+      combinedContent.appendChild(clone);
+    }
+  });
+
+  try {
     authoritativeItems.forEach((authItem) => {
-        const label = authItem.getAttribute('data-legend-label') || authItem.title || authItem.textContent.trim();
-        const info = labelMap.get(label);
-        if (!info) return;
-
-        // Include the item in the combined overlay if it exists in any chart (union)
-        const existsInAny = info.charts && info.charts.length > 0;
-        if (combinedContent && existsInAny) {
-            const clone = authItem.cloneNode(true);
-            clone.setAttribute('data-legend-label', label);
-            // ensure pointer events work for overlay clones
-            clone.style.pointerEvents = 'auto';
-            // remove any numeric value spans from the clone (values only belong in floating legend)
-            try {
-                const vs = clone.querySelectorAll && clone.querySelectorAll('.legend-value');
-                if (vs && vs.length) {
-                    vs.forEach((v) => v.remove());
-                }
-            } catch (e) { /* ignore */ }
-            // sync click to authoritative click
-            clone.addEventListener('click', (ev) => {
-                authItem.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-            });
-            // forward hover events to authoritative item so highlighting works from clones
-            clone.addEventListener('mouseenter', (ev) => { try { authItem.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true })); } catch (e) {} });
-            clone.addEventListener('mouseleave', (ev) => { try { authItem.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true })); } catch (e) {} });
-            combinedContent.appendChild(clone);
+      const label = authItem.getAttribute('data-legend-label') ||
+                    authItem.title ||
+                    authItem.textContent.trim();
+      const info = labelMap.get(label);
+      if (!info) return;
+      const nowVisible = info.charts.some(({chart, index}) => !chart.getDatasetMeta(index).hidden);
+      document.querySelectorAll('.overlay-legend [data-legend-label]').forEach((el) => {
+        if ((el.getAttribute('data-legend-label') || '').trim() === label) {
+          setItemSelectionStyle(el, info.color, nowVisible);
         }
+      });
+    });
+  } catch (e) {}
+
+  const toggle = selectedToggle || 'div1';
+
+  if (!window._lastLegendState) window._lastLegendState = {};
+  const last = window._lastLegendState;
+  if (last.toggle === toggle &&
+      last.selectedCount === selectedCount &&
+      last.whichLines === whichLinesMode &&
+      legendContent.children.length === last.itemsCount) {
+    const shouldShow = selectedCount > 0 && legendContent.children.length > 0;
+    legend.style.display = shouldShow ? 'block' : 'none';
+    legend.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
+    try {
+      Array.from(legendContent.children).forEach((child) => {
+        const label = (child.getAttribute('data-legend-label') || child.title || '').trim();
+        if (!label) return;
+        const info = labelMap.get(label);
+        if (info) {
+          const visible = info.charts.some(({chart, index}) => !chart.getDatasetMeta(index).hidden);
+          setItemSelectionStyle(child, info.color, visible);
+        }
+      });
+    } catch (e) {}
+    return true;
+  }
+
+  last.toggle       = toggle;
+  last.selectedCount = selectedCount;
+  last.whichLines   = whichLinesMode;
+  last.itemsCount   = legendContent.children.length;
+
+  if (typeof window._timelineLegendMode === 'undefined') {
+    window._timelineLegendMode = 'fixed';
+  }
+
+  const visible = datasetCount > 0 && legendContent.children.length > 0;
+  try {
+    if (legend.parentElement !== document.body) document.body.appendChild(legend);
+  } catch (e) {}
+
+  if (visible) {
+    legend.style.display = 'block';
+    legend.setAttribute('aria-hidden', 'false');
+    try {
+      if (window.innerWidth <= 700) {
+        legend.style.position = 'fixed';
+        legend.style.left = '12px';
+        legend.style.top  = '12px';
+        legend.style.right = 'auto';
+      } else {
+        legend.style.position = 'fixed';
+        legend.style.top  = '120px';
+        legend.style.right = '20px';
+        legend.style.left  = 'auto';
+      }
+      legend.style.zIndex = 9999;
+    } catch (e) {}
+  } else {
+    legend.style.display = 'none';
+    legend.setAttribute('aria-hidden', 'true');
+  }
+
+  try {
+    if (window.updateOverlayLegendVisibility) window.updateOverlayLegendVisibility();
+  } catch (e) {}
+  try {
+    if (typeof updateBottomLegendVisibility === 'function') updateBottomLegendVisibility();
+  } catch (e) {}
+  try {
+    if (typeof updateOverlayTitles === 'function') updateOverlayTitles();
+  } catch (e) {}
+  try {
+    if (typeof ensureCloseButtons === 'function') ensureCloseButtons();
+  } catch (e) {}
+
+  // --- Bottom horizontal legend (under charts) -----------------------------
+  try {
+    let bottom = document.getElementById('bottom-legend');
+    if (!bottom) {
+      bottom = document.createElement('div');
+      bottom.id = 'bottom-legend';
+      bottom.className = 'bottom-legend';
+      bottom.style.display = 'none';
+      const insertAfter = document.getElementById('div2') || document.getElementById('div1');
+      if (insertAfter && insertAfter.parentElement) insertAfter.parentElement.insertBefore(bottom, insertAfter.nextSibling);
+      else document.body.appendChild(bottom);
+    }
+    bottom.innerHTML = '';
+
+    const authItems = Array.from(document.querySelectorAll('#legend-content .legend-item'));
+    const maxVisible = 12;
+    const created = [];
+
+    authItems.forEach((auth, idx) => {
+      const label = auth.getAttribute('data-legend-label') || auth.title || auth.textContent.trim();
+      if (!label) return;
+      const item = document.createElement('div');
+      item.className = 'bottom-legend-item';
+      if (idx >= maxVisible) item.classList.add('extra');
+      item.setAttribute('data-legend-label', label);
+      item.title = label;
+
+      const sw = document.createElement('span');
+      sw.className = 'legend-swatch';
+      let color = null;
+      const authSw = auth.querySelector('.legend-swatch');
+      if (authSw) color = authSw.style.backgroundColor || authSw.style.background || authSw.getAttribute('data-color') || null;
+      try { if (!color && labelMap && labelMap.has(label)) color = labelMap.get(label).color; } catch (e) {}
+      if (color) sw.style.background = color;
+      item.appendChild(sw);
+
+      const txt = document.createElement('span');
+      txt.className = 'legend-label';
+      txt.textContent = label;
+      item.appendChild(txt);
+
+      try {
+        const info = labelMap.get(label);
+        const visibleDs = info ? info.charts.some(({chart, index}) => !chart.getDatasetMeta(index).hidden) : true;
+        if (!visibleDs) item.classList.add('hidden');
+      } catch (e) {}
+
+      item.addEventListener('click', () => {
+        const authItem = document.querySelector(`#legend-content .legend-item[data-legend-label="${CSS.escape(label)}"]`);
+        if (authItem) {
+          authItem.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+          setTimeout(() => {
+            try {
+              const info = labelMap.get(label);
+              const nowVisible = info ? info.charts.some(({chart, index}) => !chart.getDatasetMeta(index).hidden) : true;
+              item.classList.toggle('hidden', !nowVisible);
+            } catch (e) {}
+          }, 40);
+        }
+      });
+
+      item.addEventListener('mouseenter', () => {
+        const authItem = document.querySelector(`#legend-content .legend-item[data-legend-label="${CSS.escape(label)}"]`);
+        if (authItem) authItem.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      });
+      item.addEventListener('mouseleave', () => {
+        const authItem = document.querySelector(`#legend-content .legend-item[data-legend-label="${CSS.escape(label)}"]`);
+        if (authItem) authItem.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+      });
+
+      created.push(item);
     });
 
-    // Refresh overlay visuals to match current dataset visibility
-    try {
-        authoritativeItems.forEach((authItem) => {
-            const label = authItem.getAttribute('data-legend-label') || authItem.title || authItem.textContent.trim();
-            const info = labelMap.get(label);
-            if (!info) return;
-            const nowVisible = info.charts.some(({chart, index}) => !chart.getDatasetMeta(index).hidden);
-            document.querySelectorAll('.overlay-legend [data-legend-label]').forEach((el) => {
-                if ((el.getAttribute('data-legend-label') || '').trim() === label) {
-                    setItemSelectionStyle(el, info.color, nowVisible);
-                }
-            });
-        });
-    } catch (e) { /* ignore */ }
+    created.forEach((el, i) => {
+      if (i < maxVisible) bottom.appendChild(el);
+    });
 
-    // Build legend depending on toggle state
-    const toggle = selectedToggle || 'div1';
+    if (created.length > maxVisible) {
+      bottom.classList.add('bottom-legend-collapsed');
+      for (let i = maxVisible; i < created.length; i++) bottom.appendChild(created[i]);
 
-    // Short-circuit if legend already matches the current toggle and counts
-    if (!window._lastLegendState) window._lastLegendState = {};
-    const last = window._lastLegendState;
-    // If toggle and selectedCount match previous and legend already has expected children, skip rebuild
-    if (last.toggle === toggle && last.selectedCount === selectedCount && last.whichLines === whichLinesMode && legendContent.children.length === last.itemsCount) {
-        console.log('buildFloatingLegendFromChart: no change detected, skipping rebuild');
-        // Ensure visibility still correct
-        const shouldShow = selectedCount > 0 && legendContent.children.length > 0;
-        legend.style.display = shouldShow ? 'block' : 'none';
-        legend.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
-        // Refresh selection visuals on existing legend items in case dataset visibility changed
-        try {
-            Array.from(legendContent.children).forEach((child) => {
-                const label = (child.title && child.title.trim()) || (child.textContent && child.textContent.trim());
-                if (!label) return;
-                const info = labelMap.get(label);
-                if (info) {
-                    const visible = info.charts.some(({chart, index}) => !chart.getDatasetMeta(index).hidden);
-                    setItemSelectionStyle(child, info.color, visible);
-                }
-            });
-        } catch (e) { /* ignore */ }
-        return true;
-    }
-    // Unified legend already built above (labelMap). Record last state for future short-circuiting.
-    last.toggle = toggle;
-    last.selectedCount = selectedCount;
-    last.whichLines = whichLinesMode;
-    last.itemsCount = legendContent.children.length;
+      const extraCount = created.length - maxVisible;
+      const more = document.createElement('div');
+      more.className = 'bottom-legend-more';
+      more.textContent = `... +${extraCount} more`;
+      more.setAttribute('role', 'button');
+      more.setAttribute('aria-expanded', 'false');
+      more.tabIndex = 0;
 
-    // Default legend mode: 'fixed' (viewport corner). Previously sticky-in-chart is disabled by default.
-    if (typeof window._timelineLegendMode === 'undefined') window._timelineLegendMode = 'fixed';
-
-    // Show legend if we built any items
-    const visible = datasetCount > 0 && legendContent.children.length > 0;
-    // Ensure legend is appended to body (fixed viewport legend)
-    try {
-        if (legend.parentElement !== document.body) document.body.appendChild(legend);
-    } catch (e) { /* ignore */ }
-
-    if (visible) {
-        legend.style.display = 'block';
-        legend.setAttribute('aria-hidden', 'false');
-        try { clearOverlayClosed('floating'); } catch (e) {}
-                // Place the legend at a fixed viewport location so it stays put even when canvases resize/update.
-                // Small screens still get the legend inside the content area for better UX.
-                try {
-                    // fixed viewport placement
-                    if (window.innerWidth <= 700) {
-                        legend.style.position = 'fixed';
-                        legend.style.left = '12px';
-                        legend.style.top = '12px';
-                        legend.style.right = 'auto';
-                    } else {
-                        legend.style.position = 'fixed';
-                        legend.style.top = '120px';
-                        legend.style.right = '20px';
-                        legend.style.left = 'auto';
-                    }
-                    legend.style.zIndex = 9999;
-                } catch (e) { console.warn('Could not set legend position:', e); }
-    } else {
-        legend.style.display = 'none';
-        legend.setAttribute('aria-hidden', 'true');
-    }
-    console.log('buildFloatingLegendFromChart: legend visible=', !!visible, 'datasetCount=', datasetCount, 'items=', legendContent.children.length);
-    // After building the legend and overlay clones, let the page decide visibility
-    try {
-        if (window.updateOverlayLegendVisibility) window.updateOverlayLegendVisibility();
-    } catch (e) { /* ignore */ }
-    // Ensure bottom legend visibility is recalculated after legend visibility changed
-    try { if (typeof updateBottomLegendVisibility === 'function') updateBottomLegendVisibility(); } catch (e) {}
-    // Ensure titles are up-to-date after rebuild
-    try { if (typeof updateOverlayTitles === 'function') updateOverlayTitles(); } catch (e) { /* ignore */ }
-    // Ensure close buttons exist on overlays and floating legend (creates X if missing)
-    try { if (typeof ensureCloseButtons === 'function') ensureCloseButtons(); } catch (e) { /* ignore */ }
-    // --- Bottom horizontal legend: clone authoritative items into a scrollable inline row under charts ---
-    try {
-        // Ensure container exists once
-        let bottom = document.getElementById('bottom-legend');
-        if (!bottom) {
-            bottom = document.createElement('div');
-            bottom.id = 'bottom-legend';
-            bottom.className = 'bottom-legend';
-            // hidden by default; page decides visibility
-            bottom.style.display = 'none';
-            const insertAfter = document.getElementById('div2') || document.getElementById('div1');
-            if (insertAfter && insertAfter.parentElement) insertAfter.parentElement.insertBefore(bottom, insertAfter.nextSibling);
-            else document.body.appendChild(bottom);
-        }
-        // Clear and repopulate with collapse/expand behavior when many items
-        bottom.innerHTML = '';
-        const authItems = Array.from(document.querySelectorAll('#legend-content .legend-item'));
-        const maxVisible = 12;
-        const created = [];
-        authItems.forEach((auth, idx) => {
-            const label = auth.getAttribute('data-legend-label') || auth.title || auth.textContent.trim();
-            if (!label) return;
-            const item = document.createElement('div');
-            item.className = 'bottom-legend-item';
-            if (idx >= maxVisible) item.classList.add('extra');
-            item.setAttribute('data-legend-label', label);
-            item.title = label;
-            const sw = document.createElement('span'); sw.className = 'legend-swatch';
-            let color = null;
-            const authSw = auth.querySelector('.legend-swatch');
-            if (authSw) color = authSw.style.backgroundColor || authSw.style.background || authSw.getAttribute('data-color') || null;
-            try { if (!color && labelMap && labelMap.has(label)) color = labelMap.get(label).color; } catch (e) {}
-            if (color) sw.style.background = color;
-            item.appendChild(sw);
-            const txt = document.createElement('span'); txt.className = 'legend-label'; txt.textContent = label; item.appendChild(txt);
-            // Do not add a numeric value in the bottom legend; values are shown only in the floating legend
-            // mirror selection
-            try { const info = labelMap.get(label); const visible = info ? info.charts.some(({chart, index}) => !chart.getDatasetMeta(index).hidden) : true; if (!visible) item.classList.add('hidden'); } catch (e) {}
-            item.addEventListener('click', (ev) => {
-                const auth = document.querySelector(`#legend-content .legend-item[data-legend-label="${CSS.escape(label)}"]`);
-                if (auth) {
-                    auth.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                    setTimeout(() => {
-                        try { const info = labelMap.get(label); const nowVisible = info ? info.charts.some(({chart, index}) => !chart.getDatasetMeta(index).hidden) : true; item.classList.toggle('hidden', !nowVisible); } catch (e) {}
-                    }, 40);
-                }
-            });
-            // Forward hover events to the authoritative legend item so highlighting also works from bottom legend
-            item.addEventListener('mouseenter', (ev) => {
-                const auth = document.querySelector(`#legend-content .legend-item[data-legend-label="${CSS.escape(label)}"]`);
-                if (auth) try { auth.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true })); } catch (e) {}
-            });
-            item.addEventListener('mouseleave', (ev) => {
-                const auth = document.querySelector(`#legend-content .legend-item[data-legend-label="${CSS.escape(label)}"]`);
-                if (auth) try { auth.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true })); } catch (e) {}
-            });
-            created.push(item);
-        });
-        // Append visible items, then if extras exist add a "more" control
-        created.forEach((el, i) => {
-            if (i < maxVisible) bottom.appendChild(el);
-        });
-        if (created.length > maxVisible) {
-            // Create a container state class to control extra visibility
-            bottom.classList.add('bottom-legend-collapsed');
-            // Append the extra items hidden initially
-            for (let i = maxVisible; i < created.length; i++) bottom.appendChild(created[i]);
-            const more = document.createElement('div');
-            more.className = 'bottom-legend-more';
-            const extraCount = created.length - maxVisible;
-            const moreLabel = document.createElement('span');
-            moreLabel.className = 'more-label';
-            moreLabel.textContent = `... +${extraCount} more`;
-            more.appendChild(moreLabel);
-            more.setAttribute('role','button');
-            more.setAttribute('aria-expanded','false');
-            // Make keyboard-focusable
-            more.tabIndex = 0;
-            // Click handler toggles collapsed state
-            more.addEventListener('click', () => {
-                const expanded = bottom.classList.toggle('bottom-legend-collapsed');
-                // When class present we consider collapsed; toggle text accordingly
-                if (bottom.classList.contains('bottom-legend-collapsed')) {
-                    more.textContent = `... +${extraCount} more`;
-                    more.setAttribute('aria-expanded','false');
-                } else {
-                    more.textContent = 'Show less';
-                    more.setAttribute('aria-expanded','true');
-                }
-            });
-            // Keyboard handler for Enter / Space
-            more.addEventListener('keydown', (ev) => {
-                if (ev.key === 'Enter' || ev.key === ' ') {
-                    ev.preventDefault();
-                    more.click();
-                }
-            });
-            // create a separate three-dot icon element which opens a placement dropdown menu
-            const moreIcon = document.createElement('div');
-            moreIcon.className = 'bottom-legend-more-icon';
-            moreIcon.setAttribute('role','button');
-            moreIcon.tabIndex = 0;
-            moreIcon.innerHTML = '<span class="mdot"></span><span class="mdot"></span><span class="mdot"></span>';
-
-            // Build or reuse a small menu appended to body
-            let menu = document.getElementById('bottom-legend-menu');
-            if (!menu) {
-                menu = document.createElement('div');
-                menu.id = 'bottom-legend-menu';
-                menu.className = 'bottom-legend-menu';
-                menu.style.display = 'none';
-                document.body.appendChild(menu);
-            }
-
-            const closeMenu = () => {
-                if (menu) { menu.style.display = 'none'; menu.innerHTML = ''; }
-                document.removeEventListener('click', onDocClick);
-            };
-            const onDocClick = (ev) => {
-                if (!menu.contains(ev.target) && ev.target !== moreIcon) closeMenu();
-            };
-
-            const applyLegendMode = (mode) => {
-                // modes: left, right, full, below
-                try {
-                    window._timelineLegendMode = mode;
-                    const legendEl = document.getElementById('floating-legend');
-                    const canvas = document.getElementById('timelineChart') || document.getElementById('lineAreaChart');
-                    if (!legendEl || !canvas) return;
-                    const rect = canvas.getBoundingClientRect();
-                    legendEl.style.position = 'absolute';
-                    legendEl.style.zIndex = 9999;
-                    legendEl.style.width = '';
-                    if (mode === 'left') {
-                        legendEl.style.left = Math.max(8, rect.left + window.scrollX - (legendEl.offsetWidth || 220) - 18) + 'px';
-                        legendEl.style.top = Math.max(12, rect.top + window.scrollY) + 'px';
-                        legendEl.style.right = 'auto';
-                        // Also show the combined overlay on the left and hide bottom legend
-                        try {
-                            const ov = document.querySelector('.overlay-legend[data-overlay-for="combined"]');
-                            const bottom = document.getElementById('bottom-legend');
-                            if (ov) {
-                                // ensure overlay is visible and not marked closed
-                                try { clearOverlayClosed('combined'); } catch (e) {}
-                                ov.style.display = 'block';
-                                ov.setAttribute('aria-hidden', 'false');
-                                // Position overlay near left within its parent (hero root)
-                                try {
-                                    const hero = ov.parentElement || document.querySelector('.heroTransparent.notdark') || document.querySelector('.heroTransparent') || document.body;
-                                    const heroRect = hero.getBoundingClientRect();
-                                    const ovTop = Math.max(8, rect.top + window.scrollY - (heroRect.top + window.scrollY));
-                                    ov.style.position = 'absolute';
-                                    ov.style.left = '12px';
-                                    ov.style.top = (ovTop) + 'px';
-                                    ov.style.zIndex = 9999;
-                                } catch (e) { /* ignore positioning errors */ }
-                            }
-                            if (bottom) {
-                                bottom.style.display = 'none';
-                                bottom.setAttribute('aria-hidden', 'true');
-                            }
-                        } catch (e) { /* ignore overlay show errors */ }
-                    } else if (mode === 'right') {
-                        legendEl.style.left = (rect.right + 18 + window.scrollX) + 'px';
-                        legendEl.style.top = Math.max(12, rect.top + window.scrollY) + 'px';
-                        legendEl.style.right = 'auto';
-                        // Also show the combined overlay on the right and hide bottom legend
-                        try {
-                            const ov = document.querySelector('.overlay-legend[data-overlay-for="combined"]');
-                            const bottom = document.getElementById('bottom-legend');
-                            if (ov) {
-                                try { clearOverlayClosed('combined'); } catch (e) {}
-                                ov.style.display = 'block';
-                                ov.setAttribute('aria-hidden', 'false');
-                                try {
-                                    const hero = ov.parentElement || document.querySelector('.heroTransparent.notdark') || document.querySelector('.heroTransparent') || document.body;
-                                    // Ensure hero is positioned
-                                    hero.style.position = hero.style.position || 'relative';
-                                    // place overlay at right inside hero
-                                    ov.style.position = 'absolute';
-                                    ov.style.right = '12px';
-                                    ov.style.left = 'auto';
-                                    // compute top relative to hero
-                                    const heroRect = hero.getBoundingClientRect();
-                                    const ovTop = Math.max(8, rect.top + window.scrollY - (heroRect.top + window.scrollY));
-                                    ov.style.top = (ovTop) + 'px';
-                                    ov.style.zIndex = 9999;
-                                } catch (e) { /* ignore */ }
-                            }
-                            if (bottom) {
-                                bottom.style.display = 'none';
-                                bottom.setAttribute('aria-hidden', 'true');
-                            }
-                        } catch (e) { /* ignore */ }
-                    } else if (mode === 'full') {
-                        // Navigate to full list view: set geoview=country in the hash and reload
-                        try {
-                            const raw = window.location.hash ? window.location.hash.substring(1) : '';
-                            const params = new URLSearchParams(raw);
-                            params.set('geoview', 'country');
-                            // Update the hash and reload to apply full list view
-                            window.location.hash = params.toString();
-                            window.location.reload();
-                            return;
-                        } catch (e) {
-                            try { window.location.hash = 'geoview=country'; window.location.reload(); return; } catch (ee) { console.warn('could not navigate to full list', ee); }
-                        }
-                    } else if (mode === 'below') {
-                        legendEl.style.left = Math.max(8, rect.left + window.scrollX + (rect.width - (legendEl.offsetWidth || 220)) / 2) + 'px';
-                        legendEl.style.top = (rect.bottom + 12 + window.scrollY) + 'px';
-                        legendEl.style.right = 'auto';
-                    }
-                    legendEl.style.display = 'block';
-                    legendEl.setAttribute('aria-hidden', 'false');
-                } catch (e) { console.warn('applyLegendMode error', e); }
-            };
-
-            const menuItems = [
-                { id: 'left', label: 'Left Side' },
-                { id: 'right', label: 'Right Side' },
-                { id: 'full', label: 'Full list' },
-                { id: 'below', label: 'Below chart' }
-            ];
-
-            const openMenu = () => {
-                menu.innerHTML = '';
-                menuItems.forEach(it => {
-                    const row = document.createElement('div');
-                    row.className = 'bottom-legend-menu-item';
-                    row.setAttribute('role','menuitem');
-                    row.tabIndex = 0;
-                    row.setAttribute('data-item-id', it.id);
-                    row.textContent = it.label;
-                    row.addEventListener('click', (ev) => { ev.preventDefault(); applyLegendMode(it.id); closeMenu(); });
-                    row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); applyLegendMode(it.id); closeMenu(); } });
-                    menu.appendChild(row);
-                });
-                // Highlight 'Below chart' by default when opening the menu
-                try {
-                    const defaultId = 'below';
-                    const defaultRow = menu.querySelector(`[data-item-id="${defaultId}"]`);
-                    if (defaultRow) defaultRow.classList.add('selected');
-                } catch (e) { /* ignore */ }
-                const rect = moreIcon.getBoundingClientRect();
-                menu.style.display = 'block';
-                // Use absolute positioning in document coordinates so the menu scrolls with the page
-                menu.style.position = 'absolute';
-                menu.style.zIndex = 20000;
-                // Temporarily place at 0,0 so offsetWidth/offsetHeight are available
-                menu.style.left = '0px';
-                menu.style.top = '0px';
-                const mw = menu.offsetWidth || 160;
-                const mh = menu.offsetHeight || 120;
-                // Compute desired position in viewport coords
-                let leftVp = rect.right + 6;
-                let topVp = rect.top;
-                if (leftVp + mw > window.innerWidth - 8) {
-                    leftVp = rect.left - mw - 6;
-                }
-                leftVp = Math.max(6, Math.min(leftVp, Math.max(6, window.innerWidth - mw - 6)));
-                if (topVp + mh > window.innerHeight - 8) {
-                    topVp = Math.max(6, window.innerHeight - mh - 6);
-                }
-                // Convert viewport coords to document (page) coords by adding scroll offsets
-                const leftDoc = leftVp + window.scrollX;
-                const topDoc = topVp + window.scrollY;
-                menu.style.left = leftDoc + 'px';
-                menu.style.top = topDoc + 'px';
-                setTimeout(() => document.addEventListener('click', onDocClick), 10);
-            };
-
-            moreIcon.addEventListener('click', (ev) => { ev.stopPropagation(); openMenu(); });
-            moreIcon.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openMenu(); } });
-            bottom.appendChild(more);
-            bottom.appendChild(moreIcon);
-            try {
-                const existingLabels = new Set(authItems.map((el) => (el.getAttribute('data-legend-label') || el.title || el.textContent.trim())));
-                const allMap = window._timelineCountryDataByName || {};
-                const addable = Object.keys(allMap).filter((n) => n && !existingLabels.has(n));
-                if (addable.length > 0) {
-                    const addBtn = document.createElement('div');
-                    addBtn.className = 'bottom-legend-more';
-                    addBtn.textContent = 'More Locations';
-                    addBtn.setAttribute('role','button');
-                    addBtn.tabIndex = 0;
-                    let panel = document.getElementById('more-countries-menu');
-                    if (!panel) {
-                        panel = document.createElement('div');
-                        panel.id = 'more-countries-menu';
-                        panel.className = 'bottom-legend-menu';
-                        panel.style.display = 'none';
-                        const inp = document.createElement('input');
-                        inp.type = 'text';
-                        inp.placeholder = 'Search countries';
-                        inp.style.width = '96%';
-                        inp.style.margin = '8px';
-                        panel.appendChild(inp);
-                        const list = document.createElement('div');
-                        list.className = 'bottom-legend-menu-list';
-                        panel.appendChild(list);
-                        document.body.appendChild(panel);
-                        const render = (query) => {
-                            list.innerHTML = '';
-                            const q = (query||'').toLowerCase();
-                            addable.filter((n) => !q || n.toLowerCase().indexOf(q) >= 0).slice(0, 40).forEach((n) => {
-                                const row = document.createElement('div');
-                                row.className = 'bottom-legend-menu-item';
-                                row.textContent = n;
-                                row.setAttribute('role','menuitem');
-                                row.tabIndex = 0;
-                                row.addEventListener('click', () => {
-                                    try { if (typeof window.addCountryToCharts === 'function') window.addCountryToCharts(n); } catch (e) {}
-                                    try { panel.style.display = 'none'; } catch (e) {}
-                                });
-                                list.appendChild(row);
-                            });
-                        };
-                        inp.addEventListener('input', () => render(inp.value));
-                        render('');
-                    }
-                    const openPanel = () => {
-                        try {
-                            const rect = addBtn.getBoundingClientRect();
-                            panel.style.left = (rect.left + window.scrollX) + 'px';
-                            panel.style.top = (rect.bottom + window.scrollY + 6) + 'px';
-                            panel.style.display = 'block';
-                        } catch (e) {}
-                    };
-                    addBtn.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); openPanel(); });
-                    addBtn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openPanel(); } });
-                    bottom.appendChild(addBtn);
-                }
-            } catch (e) {}
+      const toggleCollapsed = () => {
+        const collapsed = bottom.classList.toggle('bottom-legend-collapsed');
+        if (collapsed) {
+          more.textContent = `... +${extraCount} more`;
+          more.setAttribute('aria-expanded', 'false');
         } else {
-            bottom.classList.remove('bottom-legend-collapsed');
-            created.forEach(el => bottom.appendChild(el));
-            try {
-                const existingLabels = new Set(authItems.map((el) => (el.getAttribute('data-legend-label') || el.title || el.textContent.trim())));
-                const allMap = window._timelineCountryDataByName || {};
-                const addable = Object.keys(allMap).filter((n) => n && !existingLabels.has(n));
-                if (addable.length > 0) {
-                    const addBtn = document.createElement('div');
-                    addBtn.className = 'bottom-legend-more';
-                    addBtn.textContent = 'More Locations';
-                    addBtn.setAttribute('role','button');
-                    addBtn.tabIndex = 0;
-                    let panel = document.getElementById('more-countries-menu');
-                    if (!panel) {
-                        panel = document.createElement('div');
-                        panel.id = 'more-countries-menu';
-                        panel.className = 'bottom-legend-menu';
-                        panel.style.display = 'none';
-                        const inp = document.createElement('input');
-                        inp.type = 'text';
-                        inp.placeholder = 'Search countries';
-                        inp.style.width = '96%';
-                        inp.style.margin = '8px';
-                        panel.appendChild(inp);
-                        const list = document.createElement('div');
-                        list.className = 'bottom-legend-menu-list';
-                        panel.appendChild(list);
-                        document.body.appendChild(panel);
-                        const render = (query) => {
-                            list.innerHTML = '';
-                            const q = (query||'').toLowerCase();
-                            addable.filter((n) => !q || n.toLowerCase().indexOf(q) >= 0).slice(0, 40).forEach((n) => {
-                                const row = document.createElement('div');
-                                row.className = 'bottom-legend-menu-item';
-                                row.textContent = n;
-                                row.setAttribute('role','menuitem');
-                                row.tabIndex = 0;
-                                row.addEventListener('click', () => {
-                                    try { if (typeof window.addCountryToCharts === 'function') window.addCountryToCharts(n); } catch (e) {}
-                                    try { panel.style.display = 'none'; } catch (e) {}
-                                });
-                                list.appendChild(row);
-                            });
-                        };
-                        inp.addEventListener('input', () => render(inp.value));
-                        render('');
-                    }
-                    const openPanel = () => {
-                        try {
-                            const rect = addBtn.getBoundingClientRect();
-                            panel.style.left = (rect.left + window.scrollX) + 'px';
-                            panel.style.top = (rect.bottom + window.scrollY + 6) + 'px';
-                            panel.style.display = 'block';
-                        } catch (e) {}
-                    };
-                    addBtn.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); openPanel(); });
-                    addBtn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openPanel(); } });
-                    bottom.appendChild(addBtn);
-                }
-            } catch (e) {}
+          more.textContent = 'Show less';
+          more.setAttribute('aria-expanded', 'true');
         }
-        // Defer visibility decision to updateBottomLegendVisibility (driven by user X clicks)
-        try { if (typeof updateBottomLegendVisibility === 'function') updateBottomLegendVisibility(); } catch (e) {}
-    } catch (e) { /* ignore bottom-legend errors */ }
-    return true;
+      };
+
+      more.addEventListener('click', toggleCollapsed);
+      more.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          toggleCollapsed();
+        }
+      });
+
+      bottom.appendChild(more);
+    }
+
+    try { updateBottomLegendVisibility(); } catch (e) {}
+  } catch (e) {}
+  return true;
 }
 
-// Try to build legend on page load for charts created later
+// Legend build attempts + visibility observer
 document.addEventListener('DOMContentLoaded', () => {
-    let attempts = 0;
-    const maxAttempts = 12;
-    const intId = setInterval(() => {
-        attempts += 1;
-        const ok = buildFloatingLegendFromChart();
-        if (ok || attempts >= maxAttempts) clearInterval(intId);
-    }, 500);
-    window.addEventListener('focus', () => buildFloatingLegendFromChart());
-    window.addEventListener('resize', () => setTimeout(buildFloatingLegendFromChart, 300));
-    // Install visibility observer so legend only appears when chart area is visible in viewport
-    try {
-        if (!window._timelineLegendVisibilityObserver) {
-            const legend = document.getElementById('floating-legend');
-            const chartContainers = [];
-            const d1 = document.getElementById('div1');
-            const d2 = document.getElementById('div2');
-            if (d1) chartContainers.push(d1);
-            if (d2) chartContainers.push(d2);
-            // If no containers found, fallback to observing the whole page (show legend normally)
-            if (chartContainers.length > 0 && legend) {
-                const onIntersect = (entries) => {
-                    // Show legend if any container is at least partially visible
-                    const anyVisible = entries.some(e => e.isIntersecting && e.intersectionRatio > 0.05);
-                    // Only show legend if it has content (built) and chart datasets exist
-                    const hasItems = document.getElementById('legend-content')?.children?.length > 0;
-                    if (anyVisible && hasItems) {
-                        legend.style.display = 'block';
-                    } else {
-                        legend.style.display = 'none';
-                    }
-                };
-                const obs = new IntersectionObserver(onIntersect, { root: null, threshold: [0, 0.05, 0.2] });
-                chartContainers.forEach(c => obs.observe(c));
-                window._timelineLegendVisibilityObserver = obs;
-            }
-        }
-    } catch (e) { console.warn('Legend visibility observer failed to install:', e); }
+  let attempts = 0;
+  const maxAttempts = 12;
+  const intId = setInterval(() => {
+    attempts += 1;
+    const ok = buildFloatingLegendFromChart();
+    if (ok || attempts >= maxAttempts) clearInterval(intId);
+  }, 500);
+
+  window.addEventListener('focus', () => buildFloatingLegendFromChart());
+  window.addEventListener('resize', () => setTimeout(buildFloatingLegendFromChart, 300));
+
+  try {
+    if (!window._timelineLegendVisibilityObserver) {
+      const legend = document.getElementById('floating-legend');
+      const chartContainers = [];
+      const d1 = document.getElementById('div1');
+      const d2 = document.getElementById('div2');
+      if (d1) chartContainers.push(d1);
+      if (d2) chartContainers.push(d2);
+
+      if (chartContainers.length > 0 && legend && 'IntersectionObserver' in window) {
+        const onIntersect = (entries) => {
+          const anyVisible = entries.some(e => e.isIntersecting && e.intersectionRatio > 0.05);
+          const hasItems = document.getElementById('legend-content')?.children?.length > 0;
+          if (anyVisible && hasItems) {
+            legend.style.display = 'block';
+          } else {
+            legend.style.display = 'none';
+          }
+        };
+        const obs = new IntersectionObserver(onIntersect, { root: null, threshold: [0, 0.05, 0.2] });
+        chartContainers.forEach(c => obs.observe(c));
+        window._timelineLegendVisibilityObserver = obs;
+      }
+    }
+  } catch (e) {
+    console.warn('Legend visibility observer failed to install:', e);
+  }
 });
 
-// Show/hide per-chart overlay legends only when the main navigation is explicitly closed/hidden.
+// --- Overlay visibility vs main-nav state ----------------------------------
 function isMainNavClosed() {
-    try {
-        const mainNav = document.getElementById('main-nav');
-        const body = document.body;
-        // If there's no main-nav element, do NOT treat as closed: overlays should remain hidden
-        if (!mainNav) return false;
-        // If body explicitly hides main-nav (app-level class), treat as closed
-        if (body.classList.contains('main-nav-hidden') || body.classList.contains('sidebar-hidden')) return true;
-        // If #main-nav has inline display:none or visibility hidden, treat as closed
-        const style = window.getComputedStyle(mainNav);
-        if (style.display === 'none' || style.visibility === 'hidden') return true;
-        // If main-nav has semantic classes that indicate it's collapsed/closed
-        if (mainNav.classList.contains('closed') || mainNav.classList.contains('collapsed') || mainNav.getAttribute('aria-hidden') === 'true') return true;
-        // If width is very small (collapsed to icons only), consider it closed for overlay purposes
-        const w = parseFloat(style.width || '0');
-        if (!isNaN(w) && w > 0 && w < 48) return true;
-        // Otherwise not closed
-        return false;
-    } catch (e) { return false; }
+  try {
+    const mainNav = document.getElementById('main-nav');
+    const body = document.body;
+    if (!mainNav) return false;
+    if (body.classList.contains('main-nav-hidden') || body.classList.contains('sidebar-hidden')) return true;
+    const style = window.getComputedStyle(mainNav);
+    if (style.display === 'none' || style.visibility === 'hidden') return true;
+    if (mainNav.classList.contains('closed') || mainNav.classList.contains('collapsed') || mainNav.getAttribute('aria-hidden') === 'true') return true;
+    const w = parseFloat(style.width || '0');
+    if (!isNaN(w) && w > 0 && w < 48) return true;
+    return false;
+  } catch (e) {
+    return false;
+  }
 }
 
 function updateOverlayLegendVisibility() {
-    try {
-        const show = isMainNavClosed();
-        // Determine which overlay(s) should be visible based on the chart-type toggle
+  try {
+    const show = isMainNavClosed();
     const selectedToggle = document.querySelector('input[name="toogleChartType"]:checked')?.value || 'div1';
-        document.querySelectorAll('.overlay-legend').forEach((el) => {
-            // Only show if overlay actually has legend items inside
-            const hasItems = el.querySelector('.overlay-legend-content')?.children?.length > 0;
-            const overlayFor = (el.getAttribute('data-overlay-for') || '').trim();
-            // If the user explicitly closed this overlay, keep it hidden
-            try {
-                const tracker = getOverlayClosedTracker();
-                if (tracker) {
-                    const closedAttr = 'data-closed-' + (overlayFor || '');
-                    if (tracker.getAttribute(closedAttr) === 'true') {
-                        el.style.display = 'none';
-                        el.setAttribute('aria-hidden', 'true');
-                        return; // skip further logic
-                    }
-                }
-            } catch (e) { /* ignore tracker errors */ }
-            // Decide visibility: nav must be closed and overlay must have items.
-            // For the combined overlay (data-overlay-for="combined"), show whenever nav is closed and it has items.
-            let shouldBeVisible = false;
-            if (overlayFor === 'combined') {
-                shouldBeVisible = show && hasItems;
-            } else {
-                // Legacy: if other overlays exist, keep previous per-overlay behavior
-                if (show && hasItems) {
-                    if (selectedToggle === 'both') {
-                        shouldBeVisible = true;
-                    } else if (selectedToggle === overlayFor) {
-                        shouldBeVisible = true;
-                    } else {
-                        shouldBeVisible = false;
-                    }
-                }
-            }
-            if (shouldBeVisible) {
-                el.style.display = 'block';
-                el.setAttribute('aria-hidden', 'false');
-            } else {
-                el.style.display = 'none';
-                el.setAttribute('aria-hidden', 'true');
-            }
-        });
-        // Also refresh titles in case scope changed but titles haven't been updated yet
-        try { if (typeof updateOverlayTitles === 'function') updateOverlayTitles(); } catch (e) { /* ignore */ }
-    } catch (e) { /* ignore visibility update errors */ }
+    document.querySelectorAll('.overlay-legend').forEach((el) => {
+      const hasItems = el.querySelector('.overlay-legend-content')?.children?.length > 0;
+      const overlayFor = (el.getAttribute('data-overlay-for') || '').trim();
+      let shouldBeVisible = false;
+      if (overlayFor === 'combined') {
+        shouldBeVisible = show && hasItems;
+      } else if (show && hasItems) {
+        if (selectedToggle === 'both') {
+          shouldBeVisible = true;
+        } else if (selectedToggle === overlayFor) {
+          shouldBeVisible = true;
+        }
+      }
+      if (shouldBeVisible) {
+        el.style.display = 'block';
+        el.setAttribute('aria-hidden', 'false');
+      } else {
+        el.style.display = 'none';
+        el.setAttribute('aria-hidden', 'true');
+      }
+    });
+    try { updateOverlayTitles(); } catch (e) {}
+  } catch (e) {}
 }
 
-// Install a MutationObserver to watch for main-nav class/style changes and body class toggles
 try {
-    if (!window._timelineOverlayNavObserver) {
-        const targets = [];
-        const mainNav = document.getElementById('main-nav');
-        if (mainNav) targets.push(mainNav);
-        targets.push(document.body);
-        const obs = new MutationObserver((mutations) => {
-            // Quick debounce
-            clearTimeout(window._overlayNavVisibilityTimer);
-            window._overlayNavVisibilityTimer = setTimeout(() => updateOverlayLegendVisibility(), 40);
-        });
-        targets.forEach((n) => {
-            try { obs.observe(n, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden'] }); } catch (e) { /* ignore */ }
-        });
-        window._timelineOverlayNavObserver = obs;
-    }
-} catch (e) { /* ignore */ }
+  if (!window._timelineOverlayNavObserver) {
+    const targets = [];
+    const mainNav = document.getElementById('main-nav');
+    if (mainNav) targets.push(mainNav);
+    targets.push(document.body);
+    const obs = new MutationObserver(() => {
+      clearTimeout(window._overlayNavVisibilityTimer);
+      window._overlayNavVisibilityTimer = setTimeout(() => updateOverlayLegendVisibility(), 40);
+    });
+    targets.forEach((n) => {
+      try { obs.observe(n, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden'] }); } catch (e) {}
+    });
+    window._timelineOverlayNavObserver = obs;
+  }
+} catch (e) {}
 
-// Storage events may toggle saved collapsed state in navigation code; listen for changes from other windows
 window.addEventListener('storage', (ev) => {
-    if (!ev.key || ev.key.indexOf('Nav') >= 0 || ev.key.indexOf('standaloneNavCollapsed') >= 0) {
-        setTimeout(updateOverlayLegendVisibility, 30);
-    }
+  if (!ev.key || ev.key.indexOf('Nav') >= 0 || ev.key.indexOf('standaloneNavCollapsed') >= 0) {
+    setTimeout(updateOverlayLegendVisibility, 30);
+  }
 });
 
-// Do not auto-run visibility update on page init; visibility will be driven
-// by the nav MutationObserver and explicit nav-close/open actions.
-
-// Run a guarded initial visibility update shortly after load so overlays appear
-// when the page first renders (kept short to allow chart setup).
 setTimeout(() => {
-    try {
-        if (window.updateOverlayLegendVisibility) window.updateOverlayLegendVisibility();
-    } catch (e) { /* ignore */ }
+  try { updateOverlayLegendVisibility(); } catch (e) {}
 }, 120);
 
-// Update overlay titles when scope changes (hash, entity selector, or scope controls)
 function updateOverlayTitles() {
-    try {
-        const titleText = getOverlayTitleText();
-        // Debug: log computed title and relevant inputs so we can trace why default appears
+  try {
+    const titleText = (function() {
+      const key = (function getScopeKeyFromHashForTitle() {
         try {
-            const hash = window.location.hash || '';
-            const ent = document.getElementById('entityId') ? document.getElementById('entityId').value : '<no-entityId>';
-            const selScope = (document.getElementById('selectScope') && document.getElementById('selectScope').value) || '<no-selectScope>';
-            console.debug('[overlay title debug] computedTitle=', titleText, ' hash=', hash, ' entityId=', ent, ' selectScope=', selScope, ' overlays=', document.querySelectorAll('.overlay-legend').length);
-        } catch (e) { /* ignore logging errors */ }
-        document.querySelectorAll('.overlay-legend').forEach((ov) => {
-            try {
-                const tspan = ov.querySelector('.overlay-legend-title-text');
-                if (tspan) tspan.textContent = titleText;
-                else {
-                    const t = ov.querySelector('.overlay-legend-title');
-                    if (t) {
-                        let s = t.querySelector('.overlay-legend-title-text');
-                        if (!s) {
-                            s = document.createElement('span');
-                            s.className = 'overlay-legend-title-text';
-                            t.insertBefore(s, t.firstChild);
-                        }
-                        s.textContent = titleText;
-                    }
-                }
-            } catch (e) { /* ignore per-overlay errors */ }
-        });
-    } catch (e) { /* ignore */ }
+          const h = window.location.hash ? new URLSearchParams(window.location.hash.substring(1)) : null;
+          if (h) {
+            const geoview = (h.get('scope') || '').toLowerCase();
+            if (geoview === 'countries' || geoview === 'country' || geoview === 'earth') return 'country';
+            if (geoview === 'states' || geoview === 'state') return 'state';
+            if (geoview === 'counties' || geoview === 'county') return 'county';
+            if (h.get('state')) return 'state';
+          }
+        } catch (e) {}
+        return 'country';
+      })();
+      if (key === 'state') return 'States';
+      if (key === 'county') return 'Counties';
+      return 'Countries';
+    })();
+
+    document.querySelectorAll('.overlay-legend').forEach((ov) => {
+      try {
+        let tspan = ov.querySelector('.overlay-legend-title-text');
+        if (!tspan) {
+          const t = ov.querySelector('.overlay-legend-title') || (() => {
+            const d = document.createElement('div');
+            d.className = 'overlay-legend-title';
+            ov.insertBefore(d, ov.firstChild);
+            return d;
+          })();
+          tspan = document.createElement('span');
+          tspan.className = 'overlay-legend-title-text';
+          t.insertBefore(tspan, t.firstChild);
+        }
+        tspan.textContent = titleText;
+      } catch (e) {}
+    });
+  } catch (e) {}
 }
 
-// DOM-based tracker for overlays the user closed (avoids session/localStorage persistence)
+// overlay closed tracker
 function getOverlayClosedTracker() {
-    try {
-        let t = document.getElementById('overlay-closed-tracker');
-        if (!t) {
-            t = document.createElement('div');
-            t.id = 'overlay-closed-tracker';
-            t.style.display = 'none';
-            document.body.appendChild(t);
-        }
-        return t;
-    } catch (e) { return null; }
+  try {
+    let t = document.getElementById('overlay-closed-tracker');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'overlay-closed-tracker';
+      t.style.display = 'none';
+      document.body.appendChild(t);
+    }
+    return t;
+  } catch (e) { return null; }
 }
-
 function markOverlayClosed(containerId) {
-    try {
-        const t = getOverlayClosedTracker();
-        if (!t) return;
-        const name = 'data-closed-' + (containerId || 'global');
-        t.setAttribute(name, 'true');
-    } catch (e) {}
+  try {
+    const t = getOverlayClosedTracker();
+    if (!t) return;
+    const name = 'data-closed-' + (containerId || 'global');
+    t.setAttribute(name, 'true');
+  } catch (e) {}
 }
-
 function clearOverlayClosed(containerId) {
-    try {
-        const t = getOverlayClosedTracker();
-        if (!t) return;
-        const name = 'data-closed-' + (containerId || 'global');
-        if (t.hasAttribute(name)) t.removeAttribute(name);
-    } catch (e) {}
+  try {
+    const t = getOverlayClosedTracker();
+    if (!t) return;
+    const name = 'data-closed-' + (containerId || 'global');
+    if (t.hasAttribute(name)) t.removeAttribute(name);
+  } catch (e) {}
 }
-
 function isAnyOverlayClosed() {
-    try {
-        const t = getOverlayClosedTracker();
-        if (!t) return false;
-        for (let i = 0; i < t.attributes.length; i++) {
-            const a = t.attributes[i];
-            if (a && String(a.name).indexOf('data-closed-') === 0 && String(a.value) === 'true') return true;
-        }
-        return false;
-    } catch (e) { return false; }
+  try {
+    const t = getOverlayClosedTracker();
+    if (!t) return false;
+    for (let i = 0; i < t.attributes.length; i++) {
+      const a = t.attributes[i];
+      if (a && String(a.name).indexOf('data-closed-') === 0 && String(a.value) === 'true') return true;
+    }
+    return false;
+  } catch (e) { return false; }
 }
 
 function updateBottomLegendVisibility() {
-    try {
-        const bottom = document.getElementById('bottom-legend');
-        if (!bottom) return;
-        const hasItems = document.getElementById('legend-content')?.children?.length > 0;
-        const anyClosed = isAnyOverlayClosed();
-        bottom.style.display = (hasItems && anyClosed) ? 'flex' : 'none';
-        bottom.setAttribute('aria-hidden', (hasItems && anyClosed) ? 'false' : 'true');
-    } catch (e) { /* ignore */ }
+  try {
+    const bottom = document.getElementById('bottom-legend');
+    if (!bottom) return;
+    const hasItems = document.getElementById('legend-content')?.children?.length > 0;
+    const anyClosed = isAnyOverlayClosed();
+    bottom.style.display = (hasItems && anyClosed) ? 'flex' : 'none';
+    bottom.setAttribute('aria-hidden', (hasItems && anyClosed) ? 'false' : 'true');
+  } catch (e) {}
 }
 
 function checkForClosedOverlays() {
-    try {
-        if (typeof updateOverlayLegendVisibility === 'function') updateOverlayLegendVisibility();
-        if (typeof updateBottomLegendVisibility === 'function') updateBottomLegendVisibility();
-    } catch (e) { /* ignore */ }
+  try {
+    updateOverlayLegendVisibility();
+    updateBottomLegendVisibility();
+  } catch (e) {}
 }
 
-// Ensure there is a close (✕) button on each overlay's title and on the floating legend
+// ensure close buttons
 function ensureCloseButtons() {
-    try {
-        // For overlay-legend elements
-        document.querySelectorAll('.overlay-legend').forEach((ov) => {
+  try {
+    document.querySelectorAll('.overlay-legend').forEach((ov) => {
+      try {
+        const overlayFor = ov.getAttribute('data-overlay-for') || '';
+        let closeBtn = ov.querySelector('.overlay-legend-close');
+        if (!closeBtn) {
+          const title = ov.querySelector('.overlay-legend-title') || (() => {
+            const t = document.createElement('div');
+            t.className = 'overlay-legend-title';
+            ov.insertBefore(t, ov.firstChild);
+            return t;
+          })();
+          const titleSpan = title.querySelector('.overlay-legend-title-text') || (() => {
+            const s = document.createElement('span');
+            s.className = 'overlay-legend-title-text';
+            s.textContent = 'Locations';
+            title.appendChild(s);
+            return s;
+          })();
+          closeBtn = document.createElement('button');
+          closeBtn.className = 'overlay-legend-close';
+          closeBtn.title = 'Close legend';
+          closeBtn.innerHTML = '✕';
+          closeBtn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            ov.style.display = 'none';
+            ov.setAttribute('aria-hidden', 'true');
+            markOverlayClosed(overlayFor || '');
             try {
-                const overlayFor = ov.getAttribute('data-overlay-for') || '';
-                let closeBtn = ov.querySelector('.overlay-legend-close');
-                if (!closeBtn) {
-                    // create close button and append to title
-                    const title = ov.querySelector('.overlay-legend-title') || (() => {
-                        const t = document.createElement('div'); t.className = 'overlay-legend-title'; ov.insertBefore(t, ov.firstChild); return t; })();
-                    const titleSpan = title.querySelector('.overlay-legend-title-text') || (() => { const s = document.createElement('span'); s.className = 'overlay-legend-title-text'; s.textContent = getOverlayTitleText(); title.appendChild(s); return s; })();
-                    closeBtn = document.createElement('button');
-                    closeBtn.className = 'overlay-legend-close';
-                    closeBtn.setAttribute('title', 'Close legend');
-                    closeBtn.innerHTML = '✕';
-                    closeBtn.addEventListener('click', (ev) => {
-                        try { ev.preventDefault(); ev.stopPropagation(); } catch (e) {}
-                        try { ov.style.display = 'none'; ov.setAttribute('aria-hidden', 'true'); } catch (e) {}
-                        try { markOverlayClosed(overlayFor || ''); } catch (e) {}
-                        // Also hide the floating fixed legend when an overlay is closed by the user
-                        try {
-                            const fixedLegend = document.getElementById('floating-legend');
-                            if (fixedLegend) {
-                                fixedLegend.style.display = 'none';
-                                fixedLegend.setAttribute('aria-hidden', 'true');
-                                try { markOverlayClosed('floating'); } catch (e) {}
-                            }
-                        } catch (e) {}
-                        try { if (typeof checkForClosedOverlays === 'function') checkForClosedOverlays(); } catch (e) {}
-                    });
-                    title.appendChild(closeBtn);
-                }
-            } catch (e) { /* ignore per-overlay */ }
-        });
+              const fixedLegend = document.getElementById('floating-legend');
+              if (fixedLegend) {
+                fixedLegend.style.display = 'none';
+                fixedLegend.setAttribute('aria-hidden', 'true');
+                markOverlayClosed('floating');
+              }
+            } catch (e) {}
+            checkForClosedOverlays();
+          });
+          title.appendChild(closeBtn);
+        }
+      } catch (e) {}
+    });
 
-        // For the fixed floating legend (#floating-legend), add a small title row with close if missing
-        try {
-            const fixedLegend = document.getElementById('floating-legend');
-            if (fixedLegend) {
-                // See if there's already a title row
-                let titleRow = fixedLegend.querySelector('.overlay-legend-title');
-                if (!titleRow) {
-                    titleRow = document.createElement('div');
-                    titleRow.className = 'overlay-legend-title';
-                    const span = document.createElement('span');
-                    span.className = 'overlay-legend-title-text';
-                    span.textContent = getOverlayTitleText();
-                    titleRow.appendChild(span);
-                    const closeBtn = document.createElement('button');
-                    closeBtn.className = 'overlay-legend-close';
-                    closeBtn.setAttribute('title', 'Close legend');
-                    closeBtn.innerHTML = '✕';
-                    closeBtn.addEventListener('click', (ev) => {
-                        try { ev.preventDefault(); ev.stopPropagation(); } catch (e) {}
-                        try { fixedLegend.style.display = 'none'; fixedLegend.setAttribute('aria-hidden', 'true'); } catch (e) {}
-                        try { markOverlayClosed('floating'); } catch (e) {}
-                        // Also hide any per-chart overlay legends when the floating legend is closed
-                        try {
-                            document.querySelectorAll('.overlay-legend').forEach((el) => {
-                                try { el.style.display = 'none'; el.setAttribute('aria-hidden', 'true'); } catch (e) {}
-                                try { const of = el.getAttribute('data-overlay-for') || ''; if (of) markOverlayClosed(of); } catch (e) {}
-                            });
-                        } catch (e) {}
-                        try { if (typeof checkForClosedOverlays === 'function') checkForClosedOverlays(); } catch (e) {}
-                    });
-                    titleRow.appendChild(closeBtn);
-                    fixedLegend.insertBefore(titleRow, fixedLegend.firstChild);
-                }
-            }
-        } catch (e) { /* ignore fixed legend errors */ }
-    } catch (e) { /* ignore overall */ }
+    const fixedLegend = document.getElementById('floating-legend');
+    if (fixedLegend) {
+      let titleRow = fixedLegend.querySelector('.overlay-legend-title');
+      if (!titleRow) {
+        titleRow = document.createElement('div');
+        titleRow.className = 'overlay-legend-title';
+        const span = document.createElement('span');
+        span.className = 'overlay-legend-title-text';
+        span.textContent = 'Locations';
+        titleRow.appendChild(span);
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'overlay-legend-close';
+        closeBtn.title = 'Close legend';
+        closeBtn.innerHTML = '✕';
+        closeBtn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          fixedLegend.style.display = 'none';
+          fixedLegend.setAttribute('aria-hidden', 'true');
+          markOverlayClosed('floating');
+          document.querySelectorAll('.overlay-legend').forEach((el) => {
+            el.style.display = 'none';
+            el.setAttribute('aria-hidden', 'true');
+            const of = el.getAttribute('data-overlay-for') || '';
+            if (of) markOverlayClosed(of);
+          });
+          checkForClosedOverlays();
+        });
+        titleRow.appendChild(closeBtn);
+        fixedLegend.insertBefore(titleRow, fixedLegend.firstChild);
+      }
+    }
+  } catch (e) {}
 }
 
-// Remove duplicate overlays in the hero root: keep only one overlay per data-overlay-for attribute.
+// Remove duplicate overlays in hero root
 function tidyOverlayLegends() {
-    try {
-        const heroRoot = document.querySelector('.heroTransparent.notdark') || document.querySelector('.heroTransparent') || document.body;
-        const overlays = Array.from(heroRoot.querySelectorAll('.overlay-legend'));
-        if (overlays.length <= 1) return;
-        const seen = new Map();
-        overlays.forEach((ov) => {
-            const key = ov.getAttribute('data-overlay-for') || '__orphan__';
-            if (!seen.has(key)) {
-                seen.set(key, ov);
-            } else {
-                try { ov.remove(); } catch (e) { /* ignore */ }
-            }
-        });
-        // Remove leftover orphans if there are too many (keep at most one orphan)
-        const orphanKey = '__orphan__';
-        const orphanEls = Array.from(heroRoot.querySelectorAll('.overlay-legend:not([data-overlay-for])'));
-        if (orphanEls.length > 1) {
-            for (let i = 1; i < orphanEls.length; i++) {
-                try { orphanEls[i].remove(); } catch (e) { /* ignore */ }
-            }
-        }
-    } catch (e) { /* ignore */ }
+  try {
+    const heroRoot = document.querySelector('.heroTransparent.notdark') ||
+                     document.querySelector('.heroTransparent') ||
+                     document.body;
+    const overlays = Array.from(heroRoot.querySelectorAll('.overlay-legend'));
+    if (overlays.length <= 1) return;
+    const seen = new Map();
+    overlays.forEach((ov) => {
+      const key = ov.getAttribute('data-overlay-for') || '__orphan__';
+      if (!seen.has(key)) {
+        seen.set(key, ov);
+      } else {
+        try { ov.remove(); } catch (e) {}
+      }
+    });
+    const orphanEls = Array.from(heroRoot.querySelectorAll('.overlay-legend:not([data-overlay-for])'));
+    if (orphanEls.length > 1) {
+      for (let i = 1; i < orphanEls.length; i++) {
+        try { orphanEls[i].remove(); } catch (e) {}
+      }
+    }
+  } catch (e) {}
 }
 
-// Hash changes indicate scope changes in this app
 window.addEventListener('hashchange', () => {
-    try { updateOverlayTitles(); } catch (e) { /* ignore */ }
+  try { updateOverlayTitles(); } catch (e) {}
 });
 
-// When the entity selector changes, update titles
+// reflect entity / scope changes in overlay titles
 document.addEventListener('change', (ev) => {
-    try {
-        const id = ev.target && ev.target.id;
-        if (id === 'entityId' || id === 'selectScope') {
-            updateOverlayTitles();
-        }
-    } catch (e) { /* ignore */ }
+  try {
+    const id = ev.target && ev.target.id;
+    if (id === 'entityId' || id === 'selectScope') {
+      updateOverlayTitles();
+    }
+  } catch (e) {}
 });
 
-
-// Helper: position legend next to a target canvas. Also manages observers/listeners
-function _positionLegendHelper(legend, targetCanvas, selectedToggle) {
-    if (!legend || !targetCanvas) return;
-
-    // Debounced reposition function
-    const reposition = () => {
-        try {
-            const rect = targetCanvas.getBoundingClientRect();
-            const lw = legend.offsetWidth || 220;
-            const topPos = rect.top + window.scrollY + 20;
-            if (window.innerWidth <= 700) {
-                legend.style.left = Math.max(8, rect.left + 12 + window.scrollX) + 'px';
-                legend.style.top = Math.max(8, rect.top + 12 + window.scrollY) + 'px';
-            } else {
-                const leftPos = rect.left + window.scrollX - lw - 18;
-                let chosenLeft = (leftPos < 8 ? rect.right + 18 + window.scrollX : leftPos);
-                // Avoid overlapping the whichLinesHolder controls
-                try {
-                    const which = document.querySelector('.whichLinesHolder');
-                    if (which) {
-                        const wRect = which.getBoundingClientRect();
-                        const legendRectCandidate = { left: chosenLeft, top: Math.max(12, topPos), right: chosenLeft + lw, bottom: Math.max(12, topPos) + (legend.offsetHeight || 220) };
-                        const whichRectAbs = { left: wRect.left + window.scrollX, top: wRect.top + window.scrollY, right: wRect.right + window.scrollX, bottom: wRect.bottom + window.scrollY };
-                        const intersects = !(legendRectCandidate.right < whichRectAbs.left || legendRectCandidate.left > whichRectAbs.right || legendRectCandidate.bottom < whichRectAbs.top || legendRectCandidate.top > whichRectAbs.bottom);
-                        if (intersects) {
-                            // move legend to the right of the canvas instead
-                            chosenLeft = rect.right + 18 + window.scrollX;
-                        }
-                    }
-                } catch (e) { /* ignore */ }
-                legend.style.left = chosenLeft + 'px';
-                legend.style.top = Math.max(12, topPos) + 'px';
-            }
-            legend.style.position = 'absolute';
-            legend.style.right = 'auto';
-            legend.style.zIndex = 9999;
-        } catch (e) { /* ignore */ }
-    };
-
-    // Clean up any previous observers/listeners we created
+// helper to position legend next to a target canvas (kept if you later use it)
+function _positionLegendHelper(legend, targetCanvas) {
+  if (!legend || !targetCanvas) return;
+  const reposition = () => {
     try {
-        if (window._timelineLegendCleanup) {
-            window._timelineLegendCleanup();
-        }
-    } catch (e) { /* ignore */ }
+      const rect = targetCanvas.getBoundingClientRect();
+      const lw   = legend.offsetWidth || 220;
+      const topPos = rect.top + window.scrollY + 20;
+      if (window.innerWidth <= 700) {
+        legend.style.left = Math.max(8, rect.left + 12 + window.scrollX) + 'px';
+        legend.style.top  = Math.max(8, rect.top + 12 + window.scrollY) + 'px';
+      } else {
+        const leftPos = rect.left + window.scrollX - lw - 18;
+        let chosenLeft = (leftPos < 8 ? rect.right + 18 + window.scrollX : leftPos);
+        legend.style.left = chosenLeft + 'px';
+        legend.style.top  = Math.max(12, topPos) + 'px';
+      }
+      legend.style.position = 'absolute';
+      legend.style.right    = 'auto';
+      legend.style.zIndex   = 9999;
+    } catch (e) {}
+  };
 
-    // Create a ResizeObserver on the canvas to reposition when it changes
-    let ro = null;
-    try {
-        ro = new ResizeObserver(() => {
-            reposition();
-        });
-        ro.observe(targetCanvas);
-    } catch (e) { ro = null; }
+  let ro = null;
+  try {
+    ro = new ResizeObserver(() => reposition());
+    ro.observe(targetCanvas);
+  } catch (e) { ro = null; }
 
-    // Debounce helper for scroll/resize
-    let timer = null;
-    //const onScrollOrResize = () => { clearTimeout(timer); timer = setTimeout(reposition, 80); };
-    //window.addEventListener('scroll', onScrollOrResize, { passive: true });
-    //window.addEventListener('resize', onScrollOrResize);
+  let timer = null;
+  const onScrollOrResize = () => {
+    clearTimeout(timer);
+    timer = setTimeout(reposition, 80);
+  };
+  window.addEventListener('scroll', onScrollOrResize, { passive: true });
+  window.addEventListener('resize', onScrollOrResize);
 
-    // Store cleanup so next call removes these
-    window._timelineLegendCleanup = () => {
-        try { if (ro) ro.disconnect(); } catch (e) {}
-        try { window.removeEventListener('scroll', onScrollOrResize); } catch (e) {}
-        try { window.removeEventListener('resize', onScrollOrResize); } catch (e) {}
-        try { clearTimeout(timer); } catch (e) {}
-        window._timelineLegendCleanup = null;
-    };
+  window._timelineLegendCleanup = () => {
+    try { if (ro) ro.disconnect(); } catch (e) {}
+    try { window.removeEventListener('scroll', onScrollOrResize); } catch (e) {}
+    try { window.removeEventListener('resize', onScrollOrResize); } catch (e) {}
+    try { clearTimeout(timer); } catch (e) {}
+    window._timelineLegendCleanup = null;
+  };
 
-    // Initial position
-    reposition();
+  reposition();
 }
 </script>
-<style>
-/* Bottom legend visual styling (transparent, unobtrusive) */
-#bottom-legend {
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 8px;
-    align-items: center;
-    justify-content: center;
-    padding: 6px 10px;
-    background: transparent; /* removed white background as requested */
-    border-radius: 6px;
-    margin-top: 12px;
-    overflow-x: auto;
-}
-.bottom-legend-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 8px;
-    border-radius: 4px;
-    background: transparent;
-    cursor: pointer;
-    white-space: nowrap;
-    border-left: 4px solid transparent;
-}
-.bottom-legend-item.hidden { opacity: 0.55; }
-.bottom-legend-more {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 6px 10px;
-    margin-left: 6px;
-    border-radius: 4px;
-    cursor: pointer;
-    background: transparent; /* no filled color */
-    color: #0066ff; /* accent color applied to text and border */
-    font-weight: 700; /* bold text */
-    border: 1px solid rgba(0,102,255,0.9);
-    box-shadow: none; /* remove shadow */
-    user-select: none;
-}
-.bottom-legend-more:hover {
-    background: rgba(0,102,255,0.06); /* subtle hover tint */
-    transform: translateY(-1px);
-}
-.bottom-legend-more:focus {
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(0,102,255,0.12);
-}
-.bottom-legend-collapsed .bottom-legend-item.extra { display: none; }
-/* two-dot icon next to more control */
-.more-label { font-weight:700; }
-/* separate three-dot icon for compact menu */
-.bottom-legend-more-icon { display:inline-flex; flex-direction:column; gap:4px; padding:6px; margin-left:6px; align-items:center; justify-content:center; cursor:pointer; }
-.bottom-legend-more-icon:focus { outline: none; box-shadow: 0 0 0 3px rgba(0,102,255,0.08); }
-.bottom-legend-more-icon .mdot { width:5px; height:5px; border-radius:50%; background:#0066ff; display:block; }
-@media (max-width:700px) {
-    #bottom-legend { padding: 6px; }
-    .bottom-legend-more { font-size: 13px; padding: 6px 8px; }
-}
-/* dropdown menu for placement options */
-.bottom-legend-menu {
-    min-width: 160px;
-    background: white;
-    border: 1px solid rgba(0,0,0,0.09);
-    border-radius: 6px;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
-    padding: 6px 4px;
-}
-.bottom-legend-menu-item {
-    padding: 8px 12px;
-    cursor: pointer;
-    border-radius: 4px;
-    white-space: nowrap;
-}
-.bottom-legend-menu-item:hover, .bottom-legend-menu-item:focus {
-    background: rgba(0,102,255,0.06);
-    outline: none;
-}
-
-.bottom-legend-menu-item.selected {
-    background: rgba(0,102,255,0.12);
-    font-weight: 700;
-}
-
-</style>
-
-</style>
-</body>
-</html>
